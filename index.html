@@ -88,14 +88,43 @@
             <button id="btnExport" class="px-4 py-2 border border-slate-300 text-slate-700 text-sm font-medium rounded-lg hover:bg-slate-50">Exportar Excel</button>
           </div>
         </div>
-        <div class="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div class="mt-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           <div class="bg-slate-50 rounded-lg p-3 text-center"><p class="text-xs text-slate-500">Turnos</p><p id="mShifts" class="text-xl font-semibold text-primary-800">—</p></div>
           <div class="bg-slate-50 rounded-lg p-3 text-center"><p class="text-xs text-slate-500">Horas programadas</p><p id="mHours" class="text-xl font-semibold text-primary-800">—</p></div>
           <div class="bg-slate-50 rounded-lg p-3 text-center"><p class="text-xs text-slate-500">Personas con turno</p><p id="mPeople" class="text-xl font-semibold text-primary-800">—</p></div>
+          <div class="bg-slate-50 rounded-lg p-3 text-center"><p class="text-xs text-slate-500">Crew</p><p id="mCrew" class="text-xl font-semibold text-primary-800">—</p></div>
+          <div class="bg-slate-50 rounded-lg p-3 text-center"><p class="text-xs text-slate-500">Crew Master</p><p id="mMaster" class="text-xl font-semibold text-accent-600">—</p></div>
           <div class="bg-slate-50 rounded-lg p-3 text-center"><p class="text-xs text-slate-500">Cobertura media</p><p id="mCover" class="text-xl font-semibold text-emerald-600">—</p></div>
         </div>
       </div>
       <div id="scheduleByDay" class="space-y-4"></div>
+
+      <!-- Vista cuadrícula semanal -->
+      <div class="mt-8 bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div class="px-4 py-3 bg-slate-50 border-b border-slate-100">
+          <h3 class="font-semibold text-primary-800">Horario semanal (cuadrícula)</h3>
+          <p class="text-xs text-slate-500 mt-0.5">Cada persona con su turno y colación por día</p>
+        </div>
+        <div class="scroll-x">
+          <table class="w-full text-sm">
+            <thead class="bg-slate-50">
+              <tr>
+                <th class="px-2 py-2 text-left sticky left-0 bg-slate-50 z-10">Nombre</th>
+                <th class="px-2 py-2 text-left">Cargo</th>
+                <th class="px-2 py-2 text-left">Fortaleza</th>
+                <th class="px-2 py-2 text-left">Lun</th>
+                <th class="px-2 py-2 text-left">Mar</th>
+                <th class="px-2 py-2 text-left">Mié</th>
+                <th class="px-2 py-2 text-left">Jue</th>
+                <th class="px-2 py-2 text-left">Vie</th>
+                <th class="px-2 py-2 text-left">Sáb</th>
+                <th class="px-2 py-2 text-left">Dom</th>
+              </tr>
+            </thead>
+            <tbody id="weekGridBody"></tbody>
+          </table>
+        </div>
+      </div>
     </div>
 
     <div id="tab-resumen" class="tab-content hidden">
@@ -252,31 +281,34 @@ function generateSchedule() {
   const MIN_SHIFT_H = 4;
   const MAX_SHIFT_H = 10;
   const HALF = 0.5;
-  const MIN_CLOSERS = 3;           // mínimo 3 personas en cierre
-  const CLOSE_START_MIN = 22 * 60; // desde 22:00 se considera ventana de cierre
+  const MIN_CLOSERS = 3;
 
-  const avgDaily = state.forecast.reduce((s,f)=>s+f.tickets,0) / Math.max(state.forecast.length,1);
-
-  const slots = state.daypart.filter(d => d.start).map(d => {
-    const tickets = avgDaily * d.pct;
-    let req = Math.ceil(tickets / (capacity * HALF));
-    if (req < 1 && tickets > 0.2) req = 1;
-    if (req > 9) req = 9;
-    return { ...d, required: req };
-  });
-
-  const closeSlotIdxs = [];
-  slots.forEach((s, i) => {
-    const sm = timeToMin(s.start);
-    const em = timeToMin(s.end);
-    if (sm >= CLOSE_START_MIN || em <= 5*60 || (em < sm)) {
-      closeSlotIdxs.push(i);
+  const peakDays = new Set(['Jueves','Viernes','Sábado']);
+  function dayCloseEndMin(day) {
+    const h = (state.hours || []).find(x => x.day === day);
+    if (h && h.closePublic) {
+      let m = timeToMin(h.closePublic);
+      if (m < 8*60) m += 1440;
+      return m + 30;
     }
-  });
+    return peakDays.has(day) ? (4*60 + 30) : (3*60);
+  }
+  function dayCloseStartMin(day) {
+    return 22 * 60;
+  }
+
+  const dailyTickets = {};
+  let avgDaily = 0;
+  state.forecast.forEach(f => { dailyTickets[f.day] = f.tickets; avgDaily += f.tickets; });
+  avgDaily = avgDaily / Math.max(state.forecast.length, 1) || 220;
+
+  const baseSlots = state.daypart.filter(d => d.start).map(d => ({
+    slot: d.slot, start: d.start, end: d.end, pct: d.pct
+  }));
 
   const shifts = [];
   const coverage = {};
-  DAYS.forEach(d => coverage[d] = slots.map(() => 0));
+  DAYS.forEach(d => coverage[d] = baseSlots.map(() => 0));
   const remaining = {};
   state.team.forEach(p => remaining[p.id] = p.weeklyHours);
 
@@ -286,9 +318,57 @@ function generateSchedule() {
     if (c.includes('SIN') || c.includes('0')) return 0;
     return 30;
   }
+  function shuffle(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
 
   DAYS.forEach((day, dayIdx) => {
     const dayKey = DAY_KEYS[dayIdx];
+    const dayTickets = dailyTickets[day] || avgDaily;
+    const volumeFactor = Math.max(0.75, Math.min(2.0, dayTickets / avgDaily));
+    const isPeak = volumeFactor >= 1.15 || peakDays.has(day);
+
+    const closeStart = dayCloseStartMin(day);
+    const closeEnd = dayCloseEndMin(day);
+
+    const slots = baseSlots.map(d => {
+      const tickets = dayTickets * d.pct;
+      let req = Math.ceil(tickets / (capacity * HALF));
+      if (isPeak) req = Math.ceil(req * Math.max(volumeFactor, 1.35));
+      else req = Math.ceil(req * volumeFactor);
+      if (isPeak && req < 2 && tickets > 0.5) req = 2;
+      if (req < 1 && tickets > 0.2) req = 1;
+      if (req > 14) req = 14;
+      return { ...d, required: req };
+    }).filter(s => {
+      let sm = timeToMin(s.start);
+      if (sm < 8*60) sm += 1440;
+      return sm < closeEnd + 30;
+    });
+
+    coverage[day] = slots.map(() => 0);
+
+    const closeSlotIdxs = [];
+    slots.forEach((s, i) => {
+      let sm = timeToMin(s.start);
+      let em = timeToMin(s.end);
+      if (em <= sm) em += 1440;
+      if (sm < 8*60) sm += 1440;
+      if (sm >= closeStart || (sm >= closeStart - 1440 && em > closeStart)) {
+        if (sm < closeEnd + 30) closeSlotIdxs.push(i);
+      }
+      if (timeToMin(s.start) < 6*60 && timeToMin(s.start) + 1440 <= closeEnd + 60) {
+        if (!closeSlotIdxs.includes(i)) closeSlotIdxs.push(i);
+      }
+    });
+    if (closeSlotIdxs.length === 0 && slots.length >= 3) {
+      for (let i = Math.max(0, slots.length - 4); i < slots.length; i++) closeSlotIdxs.push(i);
+    }
 
     let candidates = state.team
       .filter(p => {
@@ -300,41 +380,22 @@ function generateSchedule() {
         windows: state.availability[p.id][dayKey],
         assignedToday: 0,
         breakMin: colacionMin(p)
-      }))
-      .sort((a,b) => {
-        const master = x => (x.role||'').toLowerCase().includes('master') ? 2 : 1;
-        return (master(b)-master(a)) || (remaining[b.id]-remaining[a.id]);
-      });
+      }));
+    candidates = shuffle(candidates);
 
-    const demand = slots.map(s => s.required);
-
-    const closerCandidates = candidates
-      .filter(p => {
-        let canClose = false, canOp = false;
-        for (const w of p.windows) {
-          for (let i = 0; i < slots.length; i++) {
-            if (!isInWindow(slots[i].start, slots[i].end, [w])) continue;
-            if (closeSlotIdxs.includes(i)) canClose = true;
-            else canOp = true;
-          }
-        }
-        return canClose && canOp;
-      })
-      .sort((a,b) => (remaining[b.id]-remaining[a.id]));
-
-    const assignedClosers = new Set();
+    const assignedTodayIds = new Set();
 
     function tryAssignBlock(person, startIdx, endIdx) {
+      if (assignedTodayIds.has(person.id)) return false;
       const hours = (endIdx - startIdx + 1) * HALF;
       if (hours < MIN_SHIFT_H || hours > MAX_SHIFT_H) return false;
-      const netHours = hours - (person.breakMin / 60);
-      if (netHours < MIN_SHIFT_H - 0.5) return false;
       if (hours > remaining[person.id] - person.assignedToday) return false;
       if (!isInWindow(slots[startIdx].start, slots[endIdx].end, person.windows)) return false;
 
       for (let i = startIdx; i <= endIdx; i++) coverage[day][i]++;
       remaining[person.id] -= hours;
       person.assignedToday += hours;
+      assignedTodayIds.add(person.id);
 
       const startT = slots[startIdx].start;
       const endT = slots[endIdx].end;
@@ -345,24 +406,26 @@ function generateSchedule() {
       if (hours >= 4 && sm >= 11*60 && sm <= 14*60) type = 'PEAK';
 
       shifts.push({
-        empId: person.id,
-        name: person.name,
-        role: person.role,
-        strength: person.strength,
-        day,
-        start: startT,
-        end: endT,
-        hours,
-        breakMin: person.breakMin,
-        type
+        empId: person.id, name: person.name, role: person.role, strength: person.strength,
+        day, start: startT, end: endT, hours, breakMin: person.breakMin, type,
+        isMaster: (person.role||'').toLowerCase().includes('master')
       });
       return true;
     }
 
-    for (const person of closerCandidates) {
-      if (assignedClosers.size >= MIN_CLOSERS) break;
-      if (remaining[person.id] - person.assignedToday < MIN_SHIFT_H) continue;
+    const canClose = shuffle(candidates.filter(p => {
+      for (const w of p.windows) {
+        for (const i of closeSlotIdxs) {
+          if (slots[i] && isInWindow(slots[i].start, slots[i].end, [w])) return true;
+        }
+      }
+      return false;
+    }));
 
+    const closerIds = new Set();
+    for (const person of canClose) {
+      if (closerIds.size >= MIN_CLOSERS) break;
+      if (remaining[person.id] - person.assignedToday < MIN_SHIFT_H) continue;
       let best = null;
       for (const w of person.windows) {
         for (let s = 0; s < slots.length; s++) {
@@ -371,39 +434,71 @@ function generateSchedule() {
             if (hours < MIN_SHIFT_H || hours > MAX_SHIFT_H) continue;
             if (hours > remaining[person.id] - person.assignedToday) continue;
             if (!isInWindow(slots[s].start, slots[e].end, [w])) continue;
-
-            let coversClose = false;
-            for (let i = s; i <= e; i++) if (closeSlotIdxs.includes(i)) { coversClose = true; break; }
-            if (!coversClose) continue;
-
-            let coversOp = false;
-            for (let i = s; i <= e; i++) if (!closeSlotIdxs.includes(i)) { coversOp = true; break; }
-            if (!coversOp) continue;
-
-            const len = e - s;
-            if (!best || len > best.len) best = { s, e, len };
+            let coversClose = 0, coversOp = 0;
+            for (let i = s; i <= e; i++) {
+              if (closeSlotIdxs.includes(i)) coversClose++;
+              else coversOp++;
+            }
+            if (coversClose === 0) continue;
+            const score = coversClose * 20 + coversOp * 5 + hours;
+            if (!best || score > best.score) best = { s, e, score };
           }
         }
       }
-      if (best && tryAssignBlock(person, best.s, best.e)) {
-        assignedClosers.add(person.id);
+      if (best && tryAssignBlock(person, best.s, best.e)) closerIds.add(person.id);
+    }
+
+    if (closerIds.size < MIN_CLOSERS) {
+      for (const person of canClose) {
+        if (closerIds.size >= MIN_CLOSERS) break;
+        if (assignedTodayIds.has(person.id)) continue;
+        if (remaining[person.id] - person.assignedToday < 3) continue;
+        let best = null;
+        for (const w of person.windows) {
+          for (let s = 0; s < slots.length; s++) {
+            for (let e = s; e < slots.length; e++) {
+              const hours = (e - s + 1) * HALF;
+              if (hours < 3 || hours > MAX_SHIFT_H) continue;
+              if (hours > remaining[person.id] - person.assignedToday) continue;
+              if (!isInWindow(slots[s].start, slots[e].end, [w])) continue;
+              let coversClose = 0;
+              for (let i = s; i <= e; i++) if (closeSlotIdxs.includes(i)) coversClose++;
+              if (coversClose === 0) continue;
+              if (!best || hours > best.hours) best = { s, e, hours };
+            }
+          }
+        }
+        if (best && !assignedTodayIds.has(person.id)) {
+          const hours = (best.e - best.s + 1) * HALF;
+          for (let i = best.s; i <= best.e; i++) coverage[day][i]++;
+          remaining[person.id] -= hours;
+          person.assignedToday += hours;
+          assignedTodayIds.add(person.id);
+          shifts.push({
+            empId: person.id, name: person.name, role: person.role, strength: person.strength,
+            day, start: slots[best.s].start, end: slots[best.e].end, hours,
+            breakMin: person.breakMin, type: 'CIERRE',
+            isMaster: (person.role||'').toLowerCase().includes('master')
+          });
+          closerIds.add(person.id);
+        }
       }
     }
 
+    const demand = slots.map(s => s.required);
     const demandLeft = () => {
-      let total = 0;
-      for (let i = 0; i < slots.length; i++) {
-        total += Math.max(0, demand[i] - coverage[day][i]);
-      }
-      return total;
+      let t = 0;
+      for (let i = 0; i < slots.length; i++) t += Math.max(0, demand[i] - coverage[day][i]);
+      return t;
     };
-
+    const maxIter = isPeak ? 220 : 160;
     let safety = 0;
-    while (demandLeft() > 0 && safety < 150) {
+    while (demandLeft() > 0 && safety < maxIter) {
       safety++;
       let best = { score: -1e9, person: null, s: -1, e: -1 };
-
-      for (const person of candidates) {
+      const pool = (safety % 4 === 0) ? shuffle(candidates) : candidates;
+      for (const person of pool) {
+        if (assignedTodayIds.has(person.id)) continue;
         if (remaining[person.id] - person.assignedToday < MIN_SHIFT_H) continue;
         for (const w of person.windows) {
           for (let s = 0; s < slots.length; s++) {
@@ -413,36 +508,38 @@ function generateSchedule() {
               if (hours > MAX_SHIFT_H) break;
               if (hours > remaining[person.id] - person.assignedToday) break;
               if (!isInWindow(slots[s].start, slots[e].end, [w])) continue;
-
               let score = 0;
               for (let i = s; i <= e; i++) {
                 const need = demand[i] - coverage[day][i];
-                if (need > 0) score += need * 12;
-                else score -= 3;
+                if (need > 0) score += need * (isPeak ? 18 : 14);
+                else score -= 4;
               }
-              score += hours;
-              score += (remaining[person.id] - person.assignedToday) * 0.3;
-
+              score += hours * 1.2 + Math.random() * 5;
               if (score > best.score) best = { score, person, s, e };
             }
           }
         }
       }
-
-      if (best.score > 8 && best.person) {
-        tryAssignBlock(best.person, best.s, best.e);
-      } else {
-        break;
-      }
+      if (best.score > 8 && best.person) tryAssignBlock(best.person, best.s, best.e);
+      else break;
     }
+  });
+
+  const slots = baseSlots.map(d => {
+    const tickets = avgDaily * d.pct;
+    let req = Math.ceil(tickets / (capacity * HALF));
+    if (req < 1 && tickets > 0.2) req = 1;
+    if (req > 14) req = 14;
+    return { ...d, required: req };
   });
 
   let totalSlots = 0, covered = 0;
   DAYS.forEach(day => {
+    const cov = coverage[day] || [];
     slots.forEach((slot, sIdx) => {
       if (slot.required > 0) {
         totalSlots++;
-        if (coverage[day][sIdx] >= slot.required) covered++;
+        if ((cov[sIdx] || 0) >= slot.required) covered++;
       }
     });
   });
@@ -451,18 +548,12 @@ function generateSchedule() {
   const coverPct = totalSlots ? Math.round(covered / totalSlots * 100) : 0;
 
   state.generated = {
-    shifts,
-    coverage,
-    slots,
-    metrics: {
-      shiftCount: shifts.length,
-      totalHours: Math.round(totalHours * 10) / 10,
-      people: uniquePeople,
-      coverPct
-    }
+    shifts, coverage, slots,
+    metrics: { shiftCount: shifts.length, totalHours: Math.round(totalHours*10)/10, people: uniquePeople, coverPct }
   };
   renderSchedule();
   renderCoverage();
+  renderWeekGrid();
 }
 
 function renderBase() {
@@ -488,16 +579,28 @@ function renderBase() {
 
 function renderSchedule() {
   const g=state.generated; if(!g) return;
+  const uniqueCrew = new Set();
+  const uniqueMaster = new Set();
+  g.shifts.forEach(s => {
+    if (s.isMaster || (s.role||'').toLowerCase().includes('master')) uniqueMaster.add(s.empId);
+    else uniqueCrew.add(s.empId);
+  });
   document.getElementById('mShifts').textContent=g.metrics.shiftCount;
   document.getElementById('mHours').textContent=g.metrics.totalHours;
   document.getElementById('mPeople').textContent=g.metrics.people;
+  const elCrew = document.getElementById('mCrew');
+  const elMaster = document.getElementById('mMaster');
+  if (elCrew) elCrew.textContent = uniqueCrew.size;
+  if (elMaster) elMaster.textContent = uniqueMaster.size;
   document.getElementById('mCover').textContent=g.metrics.coverPct+'%';
   document.getElementById('scheduleByDay').innerHTML=DAYS.map(day=>{
     const dayShifts=g.shifts.filter(s=>s.day===day).sort((a,b)=>a.start.localeCompare(b.start)||a.name.localeCompare(b.name));
     if(!dayShifts.length) return `<div class="bg-white rounded-xl border border-slate-200 p-4"><h3 class="font-semibold text-primary-800 mb-2">${day}</h3><p class="text-sm text-slate-400">Sin turnos (revisar disponibilidad)</p></div>`;
+    const nCrew = dayShifts.filter(s => !(s.isMaster || (s.role||'').toLowerCase().includes('master'))).length;
+    const nMaster = dayShifts.filter(s => s.isMaster || (s.role||'').toLowerCase().includes('master')).length;
     const rows=dayShifts.map(s=>`<tr class="hover:bg-slate-50"><td class="px-3 py-1.5 font-medium">${s.name}</td><td class="px-3 py-1.5 text-xs">${s.role}${s.strength?' · '+s.strength:''}</td><td class="px-3 py-1.5 font-mono">${s.start}</td><td class="px-3 py-1.5 font-mono">${s.end}</td><td class="px-3 py-1.5 text-right">${s.hours}h</td><td class="px-3 py-1.5 text-xs">${s.breakMin?s.breakMin+' min':'—'}</td><td class="px-3 py-1.5"><span class="text-xs px-2 py-0.5 rounded bg-slate-100">${s.type}</span></td></tr>`).join('');
     const dayHours=dayShifts.reduce((s,x)=>s+x.hours,0);
-    return `<div class="bg-white rounded-xl border border-slate-200 overflow-hidden"><div class="px-4 py-3 bg-slate-50 border-b border-slate-100 flex justify-between items-center"><h3 class="font-semibold text-primary-800">${day}</h3><span class="text-sm text-slate-500">${dayShifts.length} turnos · ${Math.round(dayHours*10)/10}h</span></div><div class="scroll-x"><table class="w-full text-sm"><thead><tr class="text-slate-500 text-xs"><th class="px-3 py-2 text-left">Persona</th><th class="px-3 py-2 text-left">Cargo / Fortaleza</th><th class="px-3 py-2 text-left">Inicio</th><th class="px-3 py-2 text-left">Fin</th><th class="px-3 py-2 text-right">Horas</th><th class="px-3 py-2 text-left">Colación</th><th class="px-3 py-2 text-left">Tipo</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    return `<div class="bg-white rounded-xl border border-slate-200 overflow-hidden"><div class="px-4 py-3 bg-slate-50 border-b border-slate-100 flex flex-wrap justify-between items-center gap-2"><h3 class="font-semibold text-primary-800">${day}</h3><span class="text-sm text-slate-500">${dayShifts.length} turnos · ${Math.round(dayHours*10)/10}h · <strong>${nCrew} Crew</strong> · <strong class="text-accent-600">${nMaster} Master</strong></span></div><div class="scroll-x"><table class="w-full text-sm"><thead><tr class="text-slate-500 text-xs"><th class="px-3 py-2 text-left">Persona</th><th class="px-3 py-2 text-left">Cargo / Fortaleza</th><th class="px-3 py-2 text-left">Inicio</th><th class="px-3 py-2 text-left">Fin</th><th class="px-3 py-2 text-right">Horas</th><th class="px-3 py-2 text-left">Colación</th><th class="px-3 py-2 text-left">Tipo</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
   }).join('');
 }
 
@@ -509,6 +612,43 @@ function renderCoverage() {
       let cls='cov-none'; if(req===0) cls='cov-none'; else if(c>=req) cls=c>req+1?'cov-over':'cov-ok'; else cls='cov-lack';
       return `<td class="px-2 py-1 text-center ${cls}">${c}/${req}</td>`; }).join('');
     return `<tr><td class="px-2 py-1 sticky left-0 bg-white font-mono text-xs z-10">${slot.slot}</td>${cells}</tr>`;
+  }).join('');
+}
+
+function renderWeekGrid() {
+  const g = state.generated;
+  const body = document.getElementById('weekGridBody');
+  if (!g || !body) return;
+
+  const byPerson = {};
+  state.team.forEach(p => { byPerson[p.id] = { person: p, days: {} }; });
+  g.shifts.forEach(s => {
+    if (!byPerson[s.empId]) byPerson[s.empId] = { person: { id:s.empId, name:s.name, role:s.role, strength:s.strength }, days: {} };
+    const prev = byPerson[s.empId].days[s.day];
+    if (!prev || s.hours > prev.hours) byPerson[s.empId].days[s.day] = s;
+  });
+
+  const rows = Object.values(byPerson)
+    .filter(x => Object.keys(x.days).length > 0 || true)
+    .sort((a,b) => a.person.name.localeCompare(b.person.name));
+
+  body.innerHTML = rows.map(({ person, days }) => {
+    const cells = DAYS.map(day => {
+      const s = days[day];
+      if (!s) return '<td class="px-1.5 py-1.5 text-slate-400 text-xs">—</td>';
+      const col = s.breakMin ? `<div class="text-[10px] text-slate-500">Colación ${s.breakMin}min</div>` : '';
+      return `<td class="px-1.5 py-1.5 text-xs bg-emerald-50 text-emerald-900">
+        <div class="font-medium">${s.start} – ${s.end}</div>
+        <div class="text-[10px]">${s.hours}h · ${s.type}</div>
+        ${col}
+      </td>`;
+    }).join('');
+    return `<tr class="hover:bg-slate-50 border-b border-slate-100">
+      <td class="px-2 py-1.5 font-medium sticky left-0 bg-white z-10">${person.name}</td>
+      <td class="px-2 py-1.5 text-xs">${person.role||''}</td>
+      <td class="px-2 py-1.5 text-xs">${person.strength||'—'}</td>
+      ${cells}
+    </tr>`;
   }).join('');
 }
 
