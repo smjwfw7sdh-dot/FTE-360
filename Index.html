@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FTE 360° · Horario Inteligente</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: { 50:'#f0f4f8',100:'#d9e2ec',200:'#bcccdc',300:'#9fb3c8',400:'#829ab1',500:'#627d98',600:'#486581',700:'#334e68',800:'#243b53',900:'#102a43' },
+            accent: { 500:'#2b6cb0', 600:'#2c5282', 700:'#2a4365' }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; }
+    .drop-zone { transition: all .2s; }
+    .drop-zone.dragover { border-color: #2b6cb0; background: #ebf4ff; }
+    .tab-active { border-bottom: 3px solid #2b6cb0; color: #2c5282; font-weight: 600; }
+    .cov-ok { background: #c6f6d5; color: #22543d; }
+    .cov-over { background: #fefcbf; color: #744210; }
+    .cov-lack { background: #fed7d7; color: #742a2a; }
+    .cov-none { background: #edf2f7; color: #718096; }
+    table { border-collapse: collapse; }
+    th, td { border: 1px solid #e2e8f0; }
+    .scroll-x { overflow-x: auto; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+
+<header class="bg-primary-800 text-white shadow">
+  <div class="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-lg bg-white/10 flex items-center justify-center font-bold">FTE</div>
+      <div>
+        <h1 class="text-xl font-semibold">FTE 360° · Horario Inteligente</h1>
+        <p class="text-primary-200 text-sm">Generación automática de turnos por tienda</p>
+      </div>
+    </div>
+    <div id="storeBadge" class="hidden text-right">
+      <p class="text-sm text-primary-200">Tienda activa</p>
+      <p id="storeNameHeader" class="font-medium"></p>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-7xl mx-auto px-4 py-8">
+
+  <section id="uploadSection" class="mb-8">
+    <div id="dropZone" class="drop-zone border-2 border-dashed border-slate-300 rounded-xl p-12 text-center bg-white hover:border-accent-500 cursor-pointer">
+      <svg class="mx-auto h-14 w-14 text-slate-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+      <h2 class="text-lg font-medium text-slate-700 mb-1">Arrastra aquí el Excel de FTE 360°</h2>
+      <p class="text-slate-500 text-sm mb-4">Soporta FTE3.xlsx con disponibilidad, fortalezas y ciclos</p>
+      <input type="file" id="fileInput" accept=".xlsx,.xls" class="hidden" />
+      <button onclick="document.getElementById('fileInput').click()" class="inline-flex items-center px-5 py-2.5 bg-accent-600 text-white text-sm font-medium rounded-lg hover:bg-accent-700">Seleccionar archivo</button>
+    </div>
+  </section>
+
+  <div id="loading" class="hidden text-center py-16">
+    <div class="inline-block animate-spin rounded-full h-10 w-10 border-4 border-accent-600 border-t-transparent"></div>
+    <p class="mt-4 text-slate-600">Procesando Excel y generando horario óptimo...</p>
+  </div>
+
+  <div id="app" class="hidden">
+    <nav class="flex gap-1 border-b border-slate-200 mb-6 overflow-x-auto">
+      <button data-tab="horario" class="tab-btn tab-active px-5 py-3 text-sm whitespace-nowrap">Horario Óptimo</button>
+      <button data-tab="resumen" class="tab-btn px-5 py-3 text-sm text-slate-600 hover:text-slate-900 whitespace-nowrap">Resumen</button>
+      <button data-tab="equipo" class="tab-btn px-5 py-3 text-sm text-slate-600 hover:text-slate-900 whitespace-nowrap">Equipo</button>
+      <button data-tab="cobertura" class="tab-btn px-5 py-3 text-sm text-slate-600 hover:text-slate-900 whitespace-nowrap">Cobertura</button>
+    </nav>
+
+    <div id="tab-horario" class="tab-content">
+      <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 mb-6">
+        <div class="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h2 class="text-lg font-semibold text-primary-800">Horario óptimo generado</h2>
+            <p class="text-sm text-slate-500 mt-0.5">Mín. 4h por turno · Mín. 3 personas en cierre · Respeta disponibilidad, colación y jornada</p>
+          </div>
+          <div class="flex gap-2">
+            <button id="btnRegenerate" class="px-4 py-2 bg-accent-600 text-white text-sm font-medium rounded-lg hover:bg-accent-700">Volver a generar</button>
+            <button id="btnExport" class="px-4 py-2 border border-slate-300 text-slate-700 text-sm font-medium rounded-lg hover:bg-slate-50">Exportar Excel</button>
+          </div>
+        </div>
+        <div class="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div class="bg-slate-50 rounded-lg p-3 text-center"><p class="text-xs text-slate-500">Turnos</p><p id="mShifts" class="text-xl font-semibold text-primary-800">—</p></div>
+          <div class="bg-slate-50 rounded-lg p-3 text-center"><p class="text-xs text-slate-500">Horas programadas</p><p id="mHours" class="text-xl font-semibold text-primary-800">—</p></div>
+          <div class="bg-slate-50 rounded-lg p-3 text-center"><p class="text-xs text-slate-500">Personas con turno</p><p id="mPeople" class="text-xl font-semibold text-primary-800">—</p></div>
+          <div class="bg-slate-50 rounded-lg p-3 text-center"><p class="text-xs text-slate-500">Cobertura media</p><p id="mCover" class="text-xl font-semibold text-emerald-600">—</p></div>
+        </div>
+      </div>
+      <div id="scheduleByDay" class="space-y-4"></div>
+    </div>
+
+    <div id="tab-resumen" class="tab-content hidden">
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div class="bg-white rounded-xl border border-slate-200 p-4"><p class="text-xs text-slate-500 uppercase">Tienda</p><p id="kpiStore" class="text-lg font-semibold text-primary-800">—</p></div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4"><p class="text-xs text-slate-500 uppercase">Meta FTE</p><p id="kpiFte" class="text-lg font-semibold text-primary-800">—</p></div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4"><p class="text-xs text-slate-500 uppercase">Dotación</p><p id="kpiStaff" class="text-lg font-semibold text-primary-800">—</p></div>
+        <div class="bg-white rounded-xl border border-slate-200 p-4"><p class="text-xs text-slate-500 uppercase">Tickets mensuales</p><p id="kpiTickets" class="text-lg font-semibold text-primary-800">—</p></div>
+      </div>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="bg-white rounded-xl border border-slate-200 p-5"><h3 class="font-semibold text-primary-800 mb-3">Tickets por día</h3><canvas id="chartForecast" height="200"></canvas></div>
+        <div class="bg-white rounded-xl border border-slate-200 p-5"><h3 class="font-semibold text-primary-800 mb-3">Horario de operación</h3>
+          <table class="w-full text-sm"><thead class="bg-slate-50"><tr><th class="px-3 py-2 text-left">Día</th><th class="px-3 py-2 text-left">Apertura</th><th class="px-3 py-2 text-left">Cierre</th></tr></thead><tbody id="tableHours"></tbody></table>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-equipo" class="tab-content hidden">
+      <div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div class="px-5 py-3 border-b border-slate-100 font-semibold text-primary-800">Equipo y disponibilidad</div>
+        <div class="scroll-x">
+          <table class="w-full text-sm">
+            <thead class="bg-slate-50"><tr>
+              <th class="px-2 py-2 text-left">Nombre</th><th class="px-2 py-2 text-left">Cargo</th><th class="px-2 py-2 text-left">Fortaleza</th>
+              <th class="px-2 py-2 text-left">Jornada</th><th class="px-2 py-2 text-left">Ciclo</th>
+              <th class="px-2 py-2 text-left">Lun</th><th class="px-2 py-2 text-left">Mar</th><th class="px-2 py-2 text-left">Mié</th>
+              <th class="px-2 py-2 text-left">Jue</th><th class="px-2 py-2 text-left">Vie</th><th class="px-2 py-2 text-left">Sáb</th><th class="px-2 py-2 text-left">Dom</th>
+            </tr></thead>
+            <tbody id="tableTeam"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-cobertura" class="tab-content hidden">
+      <div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div class="px-5 py-3 border-b border-slate-100">
+          <h3 class="font-semibold text-primary-800">Cobertura por media hora</h3>
+          <p class="text-xs text-slate-500 mt-1">Formato: asignados / requeridos · Verde = OK · Rojo = falta · Amarillo = exceso</p>
+        </div>
+        <div class="scroll-x max-h-[520px] overflow-y-auto">
+          <table class="w-full text-xs">
+            <thead class="bg-slate-50 sticky top-0"><tr id="coverHeader"><th class="px-2 py-2 text-left sticky left-0 bg-slate-50">Franja</th></tr></thead>
+            <tbody id="coverBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer class="border-t border-slate-200 mt-12 py-5 text-center text-xs text-slate-400">FTE 360° · Horario Inteligente · Procesamiento local</footer>
+
+<script>
+const DAYS = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
+const DAY_KEYS = ['lun','mar','mie','jue','vie','sab','dom'];
+let state = { store:null, config:{}, team:[], availability:{}, daypart:[], forecast:[], hours:[], generated:null };
+
+function parseTime(val) {
+  if (!val) return null;
+  if (val instanceof Date) return String(val.getHours()).padStart(2,'0')+':'+String(val.getMinutes()).padStart(2,'0');
+  if (typeof val === 'number') { const t=Math.round(val*24*60); return String(Math.floor(t/60)%24).padStart(2,'0')+':'+String(t%60).padStart(2,'0'); }
+  return String(val).substring(0,5);
+}
+function timeToMin(t) { if(!t) return 0; const [h,m]=t.split(':').map(Number); return h*60+m; }
+
+function parseAvail(str) {
+  if (!str || typeof str !== 'string') return null;
+  const s = str.trim().toUpperCase().replace(/\s+/g,' ');
+  if (!s || s==='LIBRE' || s==='NO TRABAJA' || s==='VACACIONES' || s==='0' || s==='-') return null;
+  if (s==='COMPLETA' || s==='COMPLETO') return [{start:'08:00', end:'03:30'}];
+  if (s==='CIERRE') return [{start:'18:00', end:'03:30'}];
+  const windows = [];
+  for (const part of s.split('/')) {
+    const m = part.trim().match(/(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})/);
+    if (m) windows.push({ start: m[1].length===4?'0'+m[1]:m[1], end: m[2].length===4?'0'+m[2]:m[2] });
+  }
+  return windows.length ? windows : null;
+}
+
+function isInWindow(slotStart, slotEnd, windows) {
+  if (!windows || !windows.length) return false;
+  let ss = timeToMin(slotStart);
+  let se = timeToMin(slotEnd);
+  // Normalize slot that crosses midnight
+  if (se <= ss) se += 1440;
+  // Also consider slot times after midnight as +1440 when comparing to overnight windows
+  for (const w of windows) {
+    let ws = timeToMin(w.start);
+    let we = timeToMin(w.end);
+    if (we <= ws) we += 1440; // overnight window
+    // Slot fully inside window
+    if (ss >= ws && se <= we) return true;
+    // Slot after midnight (ss small) against overnight window that already +1440
+    if (ss < 6*60 && ss + 1440 >= ws && se + 1440 <= we) return true;
+  }
+  return false;
+}
+
+function processWorkbook(wb) {
+  const conf = XLSX.utils.sheet_to_json(wb.Sheets['CONFIGURACIÓN']||wb.Sheets['CONFIGURACION'], {header:1, defval:null});
+  let storeName='Tienda', metaFte=2.2, totalStaff=0, ticketsMonth=0, capacity=5;
+  const storeHours=[];
+  for (let r=0;r<conf.length;r++) {
+    const row=conf[r]; if(!row||!row[0]) continue;
+    const key=String(row[0]).trim().toLowerCase();
+    if(key==='tienda') storeName=row[1]||storeName;
+    if(key==='meta fte de la tienda') metaFte=Number(row[1])||metaFte;
+    if(key==='dotación total') totalStaff=Number(row[1])||totalStaff;
+    if(key.includes('tickets mensuales')) ticketsMonth=Number(row[1])||ticketsMonth;
+    if(key==='día'||key==='dia') {
+      for(let i=r+1;i<r+8&&i<conf.length;i++){ const h=conf[i]; if(!h||!h[0])break;
+        storeHours.push({day:h[0], openPublic:parseTime(h[2]), closePublic:parseTime(h[3]), hoursPublic:h[6]}); }
+    }
+  }
+
+  const teamRaw=XLSX.utils.sheet_to_json(wb.Sheets['EQUIPO'],{header:1,defval:null});
+  const team=[]; let headerIdx=-1;
+  for(let r=0;r<teamRaw.length;r++) if(teamRaw[r]&&String(teamRaw[r][0]).toUpperCase()==='ID'){headerIdx=r;break;}
+  if(headerIdx>=0) for(let r=headerIdx+1;r<teamRaw.length;r++){
+    const row=teamRaw[r]; if(!row||!row[0]||!row[1]) continue;
+    team.push({id:row[0], name:String(row[1]).trim(), role:row[2]||'Crew', level:row[3]||3, strength:row[4]||'', weeklyHours:Number(row[5])||0, cycle:row[6]||'5x2', colacion:row[10]||'30 MIN'});
+  }
+
+  const dispRaw=XLSX.utils.sheet_to_json(wb.Sheets['DISPONIBILIDAD'],{header:1,defval:null});
+  const availability={}; let dHeader=-1;
+  for(let r=0;r<dispRaw.length;r++) if(dispRaw[r]&&String(dispRaw[r][0]).toUpperCase()==='ID'){dHeader=r;break;}
+  if(dHeader>=0) for(let r=dHeader+1;r<dispRaw.length;r++){
+    const row=dispRaw[r]; if(!row||!row[0]) continue;
+    availability[row[0]]={lun:parseAvail(row[3]),mar:parseAvail(row[4]),mie:parseAvail(row[5]),jue:parseAvail(row[6]),vie:parseAvail(row[7]),sab:parseAvail(row[8]),dom:parseAvail(row[9])};
+  }
+
+  const dpRaw=XLSX.utils.sheet_to_json(wb.Sheets['DAYPART'],{header:1,defval:null});
+  const daypart=[];
+  for(let r=1;r<dpRaw.length;r++){ const row=dpRaw[r]; if(!row||!row[2]) continue;
+    let pct=Number(row[3])||0; if(pct>0.5) pct=0;
+    daypart.push({slot:row[2], start:parseTime(row[0]), end:parseTime(row[1]), pct, required:Math.min(Number(row[7])||0,12)});
+  }
+
+  const fcRaw=XLSX.utils.sheet_to_json(wb.Sheets['FORECAST DIARIO'],{header:1,defval:null});
+  const forecast=[];
+  for(const row of fcRaw){ if(!row||!row[0]) continue; const day=String(row[0]).trim();
+    if(DAYS.includes(day)) forecast.push({day, tickets:Number(row[1])||0});
+    if(String(row[0]||'').toLowerCase().includes('meta tickets')){ const v=Number(row[1]); if(v>0&&v<50) capacity=v; }
+  }
+
+  state={store:storeName, config:{metaFte,totalStaff,ticketsMonth,capacity}, team, availability, daypart, forecast, hours:storeHours, generated:null};
+  renderBase();
+  generateSchedule();
+}
+
+function generateSchedule() {
+  const capacity = state.config.capacity || 5;
+  const MIN_SHIFT_H = 4;
+  const MAX_SHIFT_H = 10;
+  const HALF = 0.5;
+  const MIN_CLOSERS = 3;           // mínimo 3 personas en cierre
+  const CLOSE_START_MIN = 22 * 60; // desde 22:00 se considera ventana de cierre
+
+  const avgDaily = state.forecast.reduce((s,f)=>s+f.tickets,0) / Math.max(state.forecast.length,1);
+
+  const slots = state.daypart.filter(d => d.start).map(d => {
+    const tickets = avgDaily * d.pct;
+    let req = Math.ceil(tickets / (capacity * HALF));
+    if (req < 1 && tickets > 0.2) req = 1;
+    if (req > 9) req = 9;
+    return { ...d, required: req };
+  });
+
+  const closeSlotIdxs = [];
+  slots.forEach((s, i) => {
+    const sm = timeToMin(s.start);
+    const em = timeToMin(s.end);
+    if (sm >= CLOSE_START_MIN || em <= 5*60 || (em < sm)) {
+      closeSlotIdxs.push(i);
+    }
+  });
+
+  const shifts = [];
+  const coverage = {};
+  DAYS.forEach(d => coverage[d] = slots.map(() => 0));
+  const remaining = {};
+  state.team.forEach(p => remaining[p.id] = p.weeklyHours);
+
+  function colacionMin(p) {
+    const c = (p.colacion || '30 MIN').toString().toUpperCase();
+    if (c.includes('60')) return 60;
+    if (c.includes('SIN') || c.includes('0')) return 0;
+    return 30;
+  }
+
+  DAYS.forEach((day, dayIdx) => {
+    const dayKey = DAY_KEYS[dayIdx];
+
+    let candidates = state.team
+      .filter(p => {
+        const av = state.availability[p.id];
+        return av && av[dayKey] && remaining[p.id] >= MIN_SHIFT_H;
+      })
+      .map(p => ({
+        ...p,
+        windows: state.availability[p.id][dayKey],
+        assignedToday: 0,
+        breakMin: colacionMin(p)
+      }))
+      .sort((a,b) => {
+        const master = x => (x.role||'').toLowerCase().includes('master') ? 2 : 1;
+        return (master(b)-master(a)) || (remaining[b.id]-remaining[a.id]);
+      });
+
+    const demand = slots.map(s => s.required);
+
+    const closerCandidates = candidates
+      .filter(p => {
+        let canClose = false, canOp = false;
+        for (const w of p.windows) {
+          for (let i = 0; i < slots.length; i++) {
+            if (!isInWindow(slots[i].start, slots[i].end, [w])) continue;
+            if (closeSlotIdxs.includes(i)) canClose = true;
+            else canOp = true;
+          }
+        }
+        return canClose && canOp;
+      })
+      .sort((a,b) => (remaining[b.id]-remaining[a.id]));
+
+    const assignedClosers = new Set();
+
+    function tryAssignBlock(person, startIdx, endIdx) {
+      const hours = (endIdx - startIdx + 1) * HALF;
+      if (hours < MIN_SHIFT_H || hours > MAX_SHIFT_H) return false;
+      const netHours = hours - (person.breakMin / 60);
+      if (netHours < MIN_SHIFT_H - 0.5) return false;
+      if (hours > remaining[person.id] - person.assignedToday) return false;
+      if (!isInWindow(slots[startIdx].start, slots[endIdx].end, person.windows)) return false;
+
+      for (let i = startIdx; i <= endIdx; i++) coverage[day][i]++;
+      remaining[person.id] -= hours;
+      person.assignedToday += hours;
+
+      const startT = slots[startIdx].start;
+      const endT = slots[endIdx].end;
+      let type = 'OPERACIÓN';
+      const sm = timeToMin(startT), em = timeToMin(endT);
+      if (sm < 9*60) type = 'APERTURA';
+      if (em >= 22*60 || em < 6*60) type = 'CIERRE';
+      if (hours >= 4 && sm >= 11*60 && sm <= 14*60) type = 'PEAK';
+
+      shifts.push({
+        empId: person.id,
+        name: person.name,
+        role: person.role,
+        strength: person.strength,
+        day,
+        start: startT,
+        end: endT,
+        hours,
+        breakMin: person.breakMin,
+        type
+      });
+      return true;
+    }
+
+    for (const person of closerCandidates) {
+      if (assignedClosers.size >= MIN_CLOSERS) break;
+      if (remaining[person.id] - person.assignedToday < MIN_SHIFT_H) continue;
+
+      let best = null;
+      for (const w of person.windows) {
+        for (let s = 0; s < slots.length; s++) {
+          for (let e = s; e < slots.length; e++) {
+            const hours = (e - s + 1) * HALF;
+            if (hours < MIN_SHIFT_H || hours > MAX_SHIFT_H) continue;
+            if (hours > remaining[person.id] - person.assignedToday) continue;
+            if (!isInWindow(slots[s].start, slots[e].end, [w])) continue;
+
+            let coversClose = false;
+            for (let i = s; i <= e; i++) if (closeSlotIdxs.includes(i)) { coversClose = true; break; }
+            if (!coversClose) continue;
+
+            let coversOp = false;
+            for (let i = s; i <= e; i++) if (!closeSlotIdxs.includes(i)) { coversOp = true; break; }
+            if (!coversOp) continue;
+
+            const len = e - s;
+            if (!best || len > best.len) best = { s, e, len };
+          }
+        }
+      }
+      if (best && tryAssignBlock(person, best.s, best.e)) {
+        assignedClosers.add(person.id);
+      }
+    }
+
+    const demandLeft = () => {
+      let total = 0;
+      for (let i = 0; i < slots.length; i++) {
+        total += Math.max(0, demand[i] - coverage[day][i]);
+      }
+      return total;
+    };
+
+    let safety = 0;
+    while (demandLeft() > 0 && safety < 150) {
+      safety++;
+      let best = { score: -1e9, person: null, s: -1, e: -1 };
+
+      for (const person of candidates) {
+        if (remaining[person.id] - person.assignedToday < MIN_SHIFT_H) continue;
+        for (const w of person.windows) {
+          for (let s = 0; s < slots.length; s++) {
+            for (let e = s; e < slots.length; e++) {
+              const hours = (e - s + 1) * HALF;
+              if (hours < MIN_SHIFT_H) continue;
+              if (hours > MAX_SHIFT_H) break;
+              if (hours > remaining[person.id] - person.assignedToday) break;
+              if (!isInWindow(slots[s].start, slots[e].end, [w])) continue;
+
+              let score = 0;
+              for (let i = s; i <= e; i++) {
+                const need = demand[i] - coverage[day][i];
+                if (need > 0) score += need * 12;
+                else score -= 3;
+              }
+              score += hours;
+              score += (remaining[person.id] - person.assignedToday) * 0.3;
+
+              if (score > best.score) best = { score, person, s, e };
+            }
+          }
+        }
+      }
+
+      if (best.score > 8 && best.person) {
+        tryAssignBlock(best.person, best.s, best.e);
+      } else {
+        break;
+      }
+    }
+  });
+
+  let totalSlots = 0, covered = 0;
+  DAYS.forEach(day => {
+    slots.forEach((slot, sIdx) => {
+      if (slot.required > 0) {
+        totalSlots++;
+        if (coverage[day][sIdx] >= slot.required) covered++;
+      }
+    });
+  });
+  const totalHours = shifts.reduce((s, sh) => s + sh.hours, 0);
+  const uniquePeople = new Set(shifts.map(s => s.empId)).size;
+  const coverPct = totalSlots ? Math.round(covered / totalSlots * 100) : 0;
+
+  state.generated = {
+    shifts,
+    coverage,
+    slots,
+    metrics: {
+      shiftCount: shifts.length,
+      totalHours: Math.round(totalHours * 10) / 10,
+      people: uniquePeople,
+      coverPct
+    }
+  };
+  renderSchedule();
+  renderCoverage();
+}
+
+function renderBase() {
+  document.getElementById('uploadSection').classList.add('hidden');
+  document.getElementById('loading').classList.add('hidden');
+  document.getElementById('app').classList.remove('hidden');
+  document.getElementById('storeBadge').classList.remove('hidden');
+  document.getElementById('storeNameHeader').textContent=state.store;
+  document.getElementById('kpiStore').textContent=state.store;
+  document.getElementById('kpiFte').textContent=state.config.metaFte;
+  document.getElementById('kpiStaff').textContent=state.team.length;
+  document.getElementById('kpiTickets').textContent=Math.round(state.config.ticketsMonth).toLocaleString('es-CL');
+  document.getElementById('tableHours').innerHTML=state.hours.map(h=>`<tr><td class="px-3 py-2">${h.day}</td><td class="px-3 py-2">${h.openPublic||'—'}</td><td class="px-3 py-2">${h.closePublic||'—'}</td></tr>`).join('');
+  const ctx=document.getElementById('chartForecast'); if(window.fcChart) window.fcChart.destroy();
+  window.fcChart=new Chart(ctx,{type:'bar',data:{labels:state.forecast.map(f=>f.day.substring(0,3)),datasets:[{label:'Tickets',data:state.forecast.map(f=>f.tickets),backgroundColor:'#2b6cb0',borderRadius:4}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true},x:{grid:{display:false}}}}});
+  document.getElementById('tableTeam').innerHTML=state.team.map(p=>{
+    const av=state.availability[p.id]||{};
+    const cells=DAY_KEYS.map(k=>{ const w=av[k]; if(!w) return '<td class="px-1.5 py-1 text-slate-400 text-xs">—</td>';
+      return `<td class="px-1.5 py-1 text-xs text-emerald-800 bg-emerald-50">${w.map(x=>x.start+'–'+x.end).join('<br>')}</td>`; }).join('');
+    return `<tr class="hover:bg-slate-50"><td class="px-2 py-1.5 font-medium">${p.name}</td><td class="px-2 py-1.5">${p.role}</td><td class="px-2 py-1.5">${p.strength||'—'}</td><td class="px-2 py-1.5">${p.weeklyHours}h</td><td class="px-2 py-1.5">${p.cycle}</td>${cells}</tr>`;
+  }).join('');
+}
+
+function renderSchedule() {
+  const g=state.generated; if(!g) return;
+  document.getElementById('mShifts').textContent=g.metrics.shiftCount;
+  document.getElementById('mHours').textContent=g.metrics.totalHours;
+  document.getElementById('mPeople').textContent=g.metrics.people;
+  document.getElementById('mCover').textContent=g.metrics.coverPct+'%';
+  document.getElementById('scheduleByDay').innerHTML=DAYS.map(day=>{
+    const dayShifts=g.shifts.filter(s=>s.day===day).sort((a,b)=>a.start.localeCompare(b.start)||a.name.localeCompare(b.name));
+    if(!dayShifts.length) return `<div class="bg-white rounded-xl border border-slate-200 p-4"><h3 class="font-semibold text-primary-800 mb-2">${day}</h3><p class="text-sm text-slate-400">Sin turnos (revisar disponibilidad)</p></div>`;
+    const rows=dayShifts.map(s=>`<tr class="hover:bg-slate-50"><td class="px-3 py-1.5 font-medium">${s.name}</td><td class="px-3 py-1.5 text-xs">${s.role}${s.strength?' · '+s.strength:''}</td><td class="px-3 py-1.5 font-mono">${s.start}</td><td class="px-3 py-1.5 font-mono">${s.end}</td><td class="px-3 py-1.5 text-right">${s.hours}h</td><td class="px-3 py-1.5 text-xs">${s.breakMin?s.breakMin+' min':'—'}</td><td class="px-3 py-1.5"><span class="text-xs px-2 py-0.5 rounded bg-slate-100">${s.type}</span></td></tr>`).join('');
+    const dayHours=dayShifts.reduce((s,x)=>s+x.hours,0);
+    return `<div class="bg-white rounded-xl border border-slate-200 overflow-hidden"><div class="px-4 py-3 bg-slate-50 border-b border-slate-100 flex justify-between items-center"><h3 class="font-semibold text-primary-800">${day}</h3><span class="text-sm text-slate-500">${dayShifts.length} turnos · ${Math.round(dayHours*10)/10}h</span></div><div class="scroll-x"><table class="w-full text-sm"><thead><tr class="text-slate-500 text-xs"><th class="px-3 py-2 text-left">Persona</th><th class="px-3 py-2 text-left">Cargo / Fortaleza</th><th class="px-3 py-2 text-left">Inicio</th><th class="px-3 py-2 text-left">Fin</th><th class="px-3 py-2 text-right">Horas</th><th class="px-3 py-2 text-left">Colación</th><th class="px-3 py-2 text-left">Tipo</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  }).join('');
+}
+
+function renderCoverage() {
+  const g=state.generated; if(!g) return;
+  document.getElementById('coverHeader').innerHTML='<th class="px-2 py-2 text-left sticky left-0 bg-slate-50 z-10">Franja</th>'+DAYS.map(d=>`<th class="px-2 py-2 text-center min-w-[64px]">${d.substring(0,3)}</th>`).join('');
+  document.getElementById('coverBody').innerHTML=g.slots.map((slot,sIdx)=>{
+    const cells=DAYS.map(day=>{ const c=g.coverage[day][sIdx]; const req=slot.required;
+      let cls='cov-none'; if(req===0) cls='cov-none'; else if(c>=req) cls=c>req+1?'cov-over':'cov-ok'; else cls='cov-lack';
+      return `<td class="px-2 py-1 text-center ${cls}">${c}/${req}</td>`; }).join('');
+    return `<tr><td class="px-2 py-1 sticky left-0 bg-white font-mono text-xs z-10">${slot.slot}</td>${cells}</tr>`;
+  }).join('');
+}
+
+function exportExcel() {
+  if(!state.generated) return;
+  const wb=XLSX.utils.book_new();
+  const shiftData=[['Día','Nombre','Cargo','Fortaleza','Inicio','Fin','Horas','Colación (min)','Tipo'],
+    ...state.generated.shifts.sort((a,b)=>DAYS.indexOf(a.day)-DAYS.indexOf(b.day)||a.start.localeCompare(b.start))
+      .map(s=>[s.day,s.name,s.role,s.strength,s.start,s.end,s.hours,s.breakMin||0,s.type])];
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(shiftData),'Horario óptimo');
+  const covHeader=['Franja',...DAYS];
+  const covRows=state.generated.slots.map((slot,i)=>[slot.slot,...DAYS.map(d=>`${state.generated.coverage[d][i]}/${slot.required}`)]);
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([covHeader,...covRows]),'Cobertura');
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([['Tienda',state.store],['Generado',new Date().toLocaleString('es-CL')],['Turnos',state.generated.metrics.shiftCount],['Horas',state.generated.metrics.totalHours],['Personas',state.generated.metrics.people],['Cobertura',state.generated.metrics.coverPct+'%']]),'Resumen');
+  XLSX.writeFile(wb,`Horario_Optimo_${state.store.replace(/\s+/g,'_')}_${new Date().toISOString().slice(0,10)}.xlsx`);
+}
+
+const dropZone=document.getElementById('dropZone'), fileInput=document.getElementById('fileInput');
+dropZone.addEventListener('dragover',e=>{e.preventDefault();dropZone.classList.add('dragover');});
+dropZone.addEventListener('dragleave',()=>dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop',e=>{e.preventDefault();dropZone.classList.remove('dragover');if(e.dataTransfer.files.length)handleFile(e.dataTransfer.files[0]);});
+dropZone.addEventListener('click',()=>fileInput.click());
+fileInput.addEventListener('change',e=>{if(e.target.files.length)handleFile(e.target.files[0]);});
+
+function handleFile(file){
+  if(!file.name.match(/\.xlsx?$/i)){alert('Sube un archivo Excel (.xlsx)');return;}
+  document.getElementById('loading').classList.remove('hidden');
+  document.getElementById('uploadSection').classList.add('hidden');
+  const reader=new FileReader();
+  reader.onload=e=>{try{const wb=XLSX.read(new Uint8Array(e.target.result),{type:'array',cellDates:true});processWorkbook(wb);}
+    catch(err){console.error(err);alert('Error: '+err.message);document.getElementById('loading').classList.add('hidden');document.getElementById('uploadSection').classList.remove('hidden');}};
+  reader.readAsArrayBuffer(file);
+}
+
+document.querySelectorAll('.tab-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    document.querySelectorAll('.tab-btn').forEach(b=>{b.classList.remove('tab-active');b.classList.add('text-slate-600');});
+    btn.classList.add('tab-active');btn.classList.remove('text-slate-600');
+    document.querySelectorAll('.tab-content').forEach(c=>c.classList.add('hidden'));
+    document.getElementById('tab-'+btn.dataset.tab).classList.remove('hidden');
+  });
+});
+document.getElementById('btnRegenerate').addEventListener('click',()=>{document.getElementById('btnRegenerate').disabled=true;setTimeout(()=>{generateSchedule();document.getElementById('btnRegenerate').disabled=false;},50);});
+document.getElementById('btnExport').addEventListener('click',exportExcel);
+</script>
+</body>
+</html>
