@@ -175,6 +175,31 @@
           </table>
         </div>
       </div>
+
+      <div class="mt-8 bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div class="px-4 py-3 bg-slate-50 border-b border-slate-100">
+          <h3 class="font-semibold text-primary-800">Cuadrícula gerencial (aparte)</h3>
+          <p class="text-xs text-slate-500 mt-0.5">No cuenta en los 10/9/9/12/12/11/10 de crew. Es para revisar la productividad de gerencia al mismo tiempo.</p>
+        </div>
+        <div class="scroll-x">
+          <table class="w-full text-sm">
+            <thead class="bg-slate-50">
+              <tr>
+                <th class="px-3 py-2 text-left">Gerente</th>
+                <th class="px-2 py-2 text-center">Lun</th>
+                <th class="px-2 py-2 text-center">Mar</th>
+                <th class="px-2 py-2 text-center">Mié</th>
+                <th class="px-2 py-2 text-center">Jue</th>
+                <th class="px-2 py-2 text-center">Vie</th>
+                <th class="px-2 py-2 text-center">Sáb</th>
+                <th class="px-2 py-2 text-center">Dom</th>
+                <th class="px-2 py-2 text-center">Días</th>
+              </tr>
+            </thead>
+            <tbody id="mgrGridBodyMain"></tbody>
+          </table>
+        </div>
+      </div>
     </div>
 
     <div id="tab-gerencial" class="tab-content hidden">
@@ -536,8 +561,11 @@ function generateSchedule() {
   const slotPeople = {}; // day -> slotIdx -> [{id, strength, isMaster}]
   DAYS.forEach(d => { slotPeople[d] = {}; });
 
-  // Días pico primero para que quien tiene pocos días cubra jueves–sábado
-  const dayOrder = ['Jueves','Viernes','Sábado','Domingo','Lunes','Martes','Miércoles'];
+  // Primero el día con menos gente disponible, para que ninguno quede en 1
+  const dayOrder = DAYS.slice().sort((a, b) => {
+    const avail = (day) => state.team.filter(p => state.availability[p.id] && state.availability[p.id][DAY_KEYS[DAYS.indexOf(day)]]).length;
+    return avail(a) - avail(b);
+  });
   dayOrder.forEach((day) => {
     const dayIdx = DAYS.indexOf(day);
     const dayKey = DAY_KEYS[dayIdx];
@@ -771,12 +799,64 @@ function generateSchedule() {
         else break;
       }
 
-      // No cortar antes de la dotación de crew. La gerencia no cuenta aquí.
-      if (assignedTodayIds.size >= idealN) {
-        let unmet = 0;
-        for (let i = 0; i < slots.length; i++) unmet += Math.max(0, (slots[i].required||0) - coverage[day][i]);
-        if (unmet < 3) break;
+      if (assignedTodayIds.size >= idealN) break;
+    }
+
+    // PHASE 2: la dotación de crew es obligatoria. Si falta gente, se asigna igual.
+    let force = 0;
+    while (assignedTodayIds.size < idealN && force < 40) {
+      force++;
+      const pool = shuffle(state.team.filter(p => {
+        if (assignedTodayIds.has(p.id)) return false;
+        const av = state.availability[p.id];
+        return av && av[dayKey];
+      }));
+      let placed = false;
+      for (const raw of pool) {
+        const person = candidates.find(c => c.id === raw.id) || {
+          ...raw,
+          windows: state.availability[raw.id][dayKey],
+          assignedToday: 0,
+          breakMin: colacionMin(raw),
+          maxDays: 7,
+          minShift: 4,
+          maxShift: 10,
+          targetShift: 6
+        };
+        person.minShift = 4;
+        person.maxShift = 10;
+        person.maxDays = 7;
+        if (remaining[person.id] < 4) remaining[person.id] = 4;
+        let best = null;
+        for (const w of person.windows) {
+          for (let s = 0; s < slots.length; s++) {
+            for (let e = s; e < slots.length; e++) {
+              const hours = (e - s + 1) * HALF;
+              if (hours < 4 || hours > 10) continue;
+              if (!isInWindow(slots[s].start, slots[e].end, [w])) continue;
+              if (!best || hours > best.hours) best = { s, e, hours };
+            }
+          }
+        }
+        if (best && tryAssignBlock(person, best.s, best.e)) {
+          placed = true;
+          break;
+        }
+        // Sin bloque compatible: igual se asigna el turno dentro de su disponibilidad.
+        const w = (person.windows && person.windows[0]) || { start: '10:00', end: '18:00' };
+        const hours = 8;
+        remaining[person.id] = Math.max(remaining[person.id] || 0, hours);
+        shifts.push({
+          empId: person.id, name: person.name, role: person.role, strength: person.strength,
+          day, start: w.start, end: w.end, hours, breakMin: colacionMin(person), type: 'OPERACIÓN',
+          isMaster: (person.role||'').toLowerCase().includes('master'), isCloser: false
+        });
+        assignedTodayIds.add(person.id);
+        daysWorked[person.id] = (daysWorked[person.id] || 0) + 1;
+        placed = true;
+        break;
       }
+      if (!placed) break;
     }
   });
 
@@ -1090,8 +1170,8 @@ function renderWeekGrid() {
 
 
 function renderManagerGrid() {
-  const body = document.getElementById('mgrGridBody');
-  if (!body) return;
+  const bodies = [document.getElementById('mgrGridBody'), document.getElementById('mgrGridBodyMain')].filter(Boolean);
+  if (!bodies.length) return;
   const week = state.managerShifts || {};
   const managers = state.managers || DEFAULT_MANAGERS;
 
@@ -1108,7 +1188,7 @@ function renderManagerGrid() {
     return map[code] || 'bg-slate-100';
   };
 
-  body.innerHTML = managers.map(m => {
+  const html = managers.map(m => {
     const days = week[m.id] || {};
     let workDays = 0;
     const cells = DAYS.map(d => {
@@ -1125,6 +1205,7 @@ function renderManagerGrid() {
       <td class="px-2 py-2 text-center text-slate-600">${workDays}</td>
     </tr>`;
   }).join('');
+  bodies.forEach(body => { body.innerHTML = html; });
 
   // Actualizar labels de fuente
   const srcLabel = document.getElementById('mgrSourceLabel');
