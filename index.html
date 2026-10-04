@@ -152,8 +152,8 @@
       <!-- Vista cuadrícula semanal -->
       <div class="mt-8 bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div class="px-4 py-3 bg-slate-50 border-b border-slate-100">
-          <h3 class="font-semibold text-primary-800">Horario semanal (cuadrícula)</h3>
-          <p class="text-xs text-slate-500 mt-0.5">Cada persona con su turno y colación por día</p>
+          <h3 class="font-semibold text-primary-800">Cuadrícula crew (sin gerencia)</h3>
+          <p class="text-xs text-slate-500 mt-0.5">Solo crew y crew master. Los 3 cierres van dentro de esta dotación. La gerencia está en su pestaña.</p>
         </div>
         <div class="scroll-x">
           <table class="w-full text-sm">
@@ -180,7 +180,7 @@
     <div id="tab-gerencial" class="tab-content hidden">
       <div class="bg-white rounded-xl border border-slate-200 p-5 mb-4">
         <h2 class="text-lg font-semibold text-primary-800">Horario Gerencial</h2>
-        <p class="text-sm text-slate-500 mt-1">Carga el horario de gerencia para generar el <strong>horario definitivo</strong>. Los turnos cargados se respetan y se combinan con el crew. Si no cargas archivo, el sistema usa relleno automático.</p>
+        <p class="text-sm text-slate-500 mt-1">Cuadrícula independiente de la gerencia. No se mezcla con el crew. El crew del día ya incluye sus 3 cierres.</p>
         <div class="mt-3 flex flex-wrap gap-2 text-xs">
           <span class="px-2 py-1 rounded bg-blue-100 text-blue-800">A = Apertura 08:00-17:00</span>
           <span class="px-2 py-1 rounded bg-sky-100 text-sky-800">M = Medio GL 10:00-19:00</span>
@@ -454,7 +454,7 @@ function generateSchedule() {
   const HALF = 0.5;
   const MIN_CLOSERS = 3;
 
-  // Ideal headcount per day (hard targets from operations)
+  // Dotación ideal SOLO de crew (masters incluidos). La gerencia se suma aparte.
   const IDEAL_HEADCOUNT = {
     'Lunes': 10, 'Martes': 9, 'Miércoles': 9,
     'Jueves': 12, 'Viernes': 12, 'Sábado': 11, 'Domingo': 10
@@ -771,7 +771,7 @@ function generateSchedule() {
         else break;
       }
 
-      // Stop if headcount reached and demand mostly covered
+      // No cortar antes de la dotación de crew. La gerencia no cuenta aquí.
       if (assignedTodayIds.size >= idealN) {
         let unmet = 0;
         for (let i = 0; i < slots.length; i++) unmet += Math.max(0, (slots[i].required||0) - coverage[day][i]);
@@ -916,8 +916,10 @@ function generateSchedule() {
     return { id: p.id, name: p.name, weekly: rules.weekly, cycle: p.cycle, workDays: rules.workDays, gotH, gotD, okDays, okHours };
   });
   const dayHeadcount = {};
+  const mgrPerDay = {};
   DAYS.forEach(d => {
     dayHeadcount[d] = new Set(shifts.filter(s => s.day === d && !s.isManager).map(s => s.empId)).size;
+    mgrPerDay[d] = new Set(shifts.filter(s => s.day === d && s.isManager).map(s => s.empId)).size;
   });
 
   state.generated = {
@@ -932,9 +934,10 @@ function generateSchedule() {
       targetWeekly: 560,
       hoursGap: Math.round((560 - totalHoursCrew) * 10) / 10,
       mgrFills: mgrFills.length,
-      idealNote: 'L10 M9 X9 J12 V12 S11 D10',
+      idealNote: 'Crew L10 M9 X9 J12 V12 S11 D10 + gerencia aparte',
       compliance,
       dayHeadcount,
+      mgrPerDay,
       cycleOk: compliance.filter(c => c.okDays).length,
       hoursOk: compliance.filter(c => c.okHours).length
     }
@@ -990,8 +993,9 @@ function renderSchedule() {
     const daysLine = DAYS.map(d => {
       const got = (g.metrics.dayHeadcount && g.metrics.dayHeadcount[d]) || 0;
       const ideal = IDEAL[d];
+      const mgrN = (g.metrics.mgrPerDay && g.metrics.mgrPerDay[d]) || 0;
       const cls = got === ideal ? 'text-emerald-700' : (got < ideal ? 'text-red-700' : 'text-amber-700');
-      return `<span class="${cls}">${d.slice(0,3)} ${got}/${ideal}</span>`;
+      return `<span class="${cls}">${d.slice(0,3)} ${got}/${ideal} crew + ${mgrN} gerencia</span>`;
     }).join(' · ');
     const bad = g.metrics.compliance.filter(c => !c.okDays || !c.okHours).slice(0, 8);
     const badTxt = bad.length
@@ -1003,8 +1007,8 @@ function renderSchedule() {
           <span class="text-slate-500">(contratadas en equipo: ${g.metrics.contractedHours} h)</span></p>
         <p class="mt-1"><strong>Ciclo:</strong> ${g.metrics.cycleOk}/${g.metrics.compliance.length} con días exactos
           · <strong>Jornada:</strong> ${g.metrics.hoursOk}/${g.metrics.compliance.length} dentro de ±2 h</p>
-        <p class="mt-1"><strong>Dotación vs ideal:</strong> ${daysLine}</p>
-        <p class="mt-1 text-xs text-slate-500"><strong>Cierre:</strong> 3 personas de cierre todos los días; entran en el horario y en la dotación del día. <strong>Relevo:</strong> misma fortaleza y Crew Master al cambiar de turno.</p>
+        <p class="mt-1"><strong>Dotación crew (sin gerencia):</strong> ${daysLine}</p>
+        <p class="mt-1 text-xs text-slate-500">La gerencia del Excel se suma encima y no reemplaza el cupo de crew. Los 3 de cierre sí cuentan dentro del crew.</p>
         <p class="mt-1 text-xs">${badTxt}</p>
       </div>`;
   }
@@ -1016,13 +1020,17 @@ function renderSchedule() {
   document.getElementById('scheduleByDay').innerHTML=DAYS.map(day=>{
     const dayShifts=g.shifts.filter(s=>s.day===day).sort((a,b)=>a.start.localeCompare(b.start)||a.name.localeCompare(b.name));
     if(!dayShifts.length) return `<div class="bg-white rounded-xl border border-slate-200 p-4"><h3 class="font-semibold text-primary-800 mb-2">${day}</h3><p class="text-sm text-slate-400">Sin turnos (revisar disponibilidad)</p></div>`;
-    const nCrew = dayShifts.filter(s => !(s.isMaster || (s.role||'').toLowerCase().includes('master'))).length;
-    const nMaster = dayShifts.filter(s => s.isMaster || (s.role||'').toLowerCase().includes('master')).length;
-    const rows=dayShifts.map(s=>`<tr class="hover:bg-slate-50"><td class="px-3 py-1.5 font-medium">${s.name}</td><td class="px-3 py-1.5 text-xs">${s.role}${s.strength?' · '+s.strength:''}</td><td class="px-3 py-1.5 font-mono">${s.start}</td><td class="px-3 py-1.5 font-mono">${s.end}</td><td class="px-3 py-1.5 text-right">${s.hours}h</td><td class="px-3 py-1.5 text-xs">${s.breakMin?s.breakMin+' min':'—'}</td><td class="px-3 py-1.5"><span class="text-xs px-2 py-0.5 rounded bg-slate-100">${s.type}</span></td></tr>`).join('');
-    const dayHours=dayShifts.reduce((s,x)=>s+x.hours,0);
-    const nClosers = dayShifts.filter(s => s.type === 'CIERRE' || s.isCloser).length;
+    const crewShifts = dayShifts.filter(s => !s.isManager);
+    const mgrShifts = dayShifts.filter(s => s.isManager);
+    const nCrew = crewShifts.length;
+    const nMaster = crewShifts.filter(s => s.isMaster || (s.role||'').toLowerCase().includes('master')).length;
+    const ideal = ({Lunes:10,Martes:9,'Miércoles':9,Jueves:12,Viernes:12,'Sábado':11,Domingo:10})[day] || '—';
+    const rows=crewShifts.map(s=>`<tr class="hover:bg-slate-50 ${s.isCloser||s.type==='CIERRE'?'bg-amber-50':''}"><td class="px-3 py-1.5 font-medium">${s.name}</td><td class="px-3 py-1.5 text-xs">${s.role}${s.strength?' · '+s.strength:''}</td><td class="px-3 py-1.5 font-mono">${s.start}</td><td class="px-3 py-1.5 font-mono">${s.end}</td><td class="px-3 py-1.5 text-right">${s.hours}h</td><td class="px-3 py-1.5 text-xs">${s.breakMin?s.breakMin+' min':'—'}</td><td class="px-3 py-1.5"><span class="text-xs px-2 py-0.5 rounded ${s.isCloser||s.type==='CIERRE'?'bg-amber-200':'bg-slate-100'}">${s.type}</span></td></tr>`).join('');
+    const dayHours=crewShifts.reduce((s,x)=>s+x.hours,0);
+    const nClosers = crewShifts.filter(s => s.type === 'CIERRE' || s.isCloser).length;
     const closerCls = nClosers >= 3 ? 'text-emerald-700' : 'text-red-700';
-    return `<div class="bg-white rounded-xl border border-slate-200 overflow-hidden"><div class="px-4 py-3 bg-slate-50 border-b border-slate-100 flex flex-wrap justify-between items-center gap-2"><h3 class="font-semibold text-primary-800">${day}</h3><span class="text-sm text-slate-500">${dayShifts.length} personas (incl. cierre) · ${Math.round(dayHours*10)/10}h · <strong>${nCrew} Crew</strong> · <strong class="text-accent-600">${nMaster} Master</strong> · <strong class="${closerCls}">${nClosers}/3 cierre</strong> · ideal ${({Lunes:10,Martes:9,'Miércoles':9,Jueves:12,Viernes:12,'Sábado':11,Domingo:10})[day]||'—'}</span></div><div class="scroll-x"><table class="w-full text-sm"><thead><tr class="text-slate-500 text-xs"><th class="px-3 py-2 text-left">Persona</th><th class="px-3 py-2 text-left">Cargo / Fortaleza</th><th class="px-3 py-2 text-left">Inicio</th><th class="px-3 py-2 text-left">Fin</th><th class="px-3 py-2 text-right">Horas</th><th class="px-3 py-2 text-left">Colación</th><th class="px-3 py-2 text-left">Tipo</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    const crewCls = nCrew === ideal ? 'text-emerald-700' : 'text-red-700';
+    return `<div class="bg-white rounded-xl border border-slate-200 overflow-hidden"><div class="px-4 py-3 bg-slate-50 border-b border-slate-100 flex flex-wrap justify-between items-center gap-2"><h3 class="font-semibold text-primary-800">${day}</h3><span class="text-sm text-slate-500"><strong class="${crewCls}">${nCrew}/${ideal} crew</strong> (de ellos <strong class="${closerCls}">${nClosers}/3 cierre</strong>) + <strong>${mgrShifts.length} gerencia aparte</strong> · ${Math.round(dayHours*10)/10}h crew · ${nMaster} master</span></div><div class="scroll-x"><table class="w-full text-sm"><thead><tr class="text-slate-500 text-xs"><th class="px-3 py-2 text-left">Persona</th><th class="px-3 py-2 text-left">Cargo / Fortaleza</th><th class="px-3 py-2 text-left">Inicio</th><th class="px-3 py-2 text-left">Fin</th><th class="px-3 py-2 text-right">Horas</th><th class="px-3 py-2 text-left">Colación</th><th class="px-3 py-2 text-left">Tipo</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
   }).join('');
 }
 
@@ -1047,6 +1055,7 @@ function renderWeekGrid() {
   const byPerson = {};
   state.team.forEach(p => { byPerson[p.id] = { person: p, days: {} }; });
   g.shifts.forEach(s => {
+    if (s.isManager) return;
     if (!byPerson[s.empId]) byPerson[s.empId] = { person: { id:s.empId, name:s.name, role:s.role, strength:s.strength }, days: {} };
     // if multiple shifts same day, keep longest or concatenate
     const prev = byPerson[s.empId].days[s.day];
@@ -1054,17 +1063,18 @@ function renderWeekGrid() {
   });
 
   const rows = Object.values(byPerson)
-    .filter(x => Object.keys(x.days).length > 0 || true) // show all team
+    .filter(x => Object.keys(x.days).length > 0)
     .sort((a,b) => a.person.name.localeCompare(b.person.name));
 
   body.innerHTML = rows.map(({ person, days }) => {
     const cells = DAYS.map(day => {
       const s = days[day];
       if (!s) return '<td class="px-1.5 py-1.5 text-slate-400 text-xs">—</td>';
+      const cierre = s.isCloser || s.type === 'CIERRE';
       const col = s.breakMin ? `<div class="text-[10px] text-slate-500">Colación ${s.breakMin}min</div>` : '';
-      return `<td class="px-1.5 py-1.5 text-xs bg-emerald-50 text-emerald-900">
+      return `<td class="px-1.5 py-1.5 text-xs ${cierre ? 'bg-amber-100 text-amber-950' : 'bg-emerald-50 text-emerald-900'}">
         <div class="font-medium">${s.start} – ${s.end}</div>
-        <div class="text-[10px]">${s.hours}h · ${s.type}</div>
+        <div class="text-[10px]">${s.hours}h · ${cierre ? 'CIERRE' : s.type}</div>
         ${col}
       </td>`;
     }).join('');
@@ -1104,9 +1114,10 @@ function renderManagerGrid() {
     const cells = DAYS.map(d => {
       const code = (days[d] || 'L').toString().toUpperCase();
       if (code !== 'L') workDays++;
-      const tpl = MGR_SHIFT_TEMPLATES[code];
+      const tpl = MGR_SHIFT_TEMPLATES[code] || MGR_SHIFT_TEMPLATES['L'];
       const tip = tpl && tpl.start ? `${tpl.label} ${tpl.start}-${tpl.end}` : 'Libre';
-      return `<td class="px-2 py-2 text-center"><span title="${tip}" class="inline-block min-w-[2rem] px-2 py-1 rounded text-xs font-semibold ${color(code)}">${code}</span></td>`;
+      const hours = tpl && tpl.start ? `<div class="text-[10px] font-normal">${tpl.start}–${tpl.end}</div>` : '';
+      return `<td class="px-2 py-2 text-center"><span title="${tip}" class="inline-block min-w-[3.2rem] px-2 py-1 rounded text-xs font-semibold ${color(code)}">${code}${hours}</span></td>`;
     }).join('');
     return `<tr class="border-b border-slate-100">
       <td class="px-3 py-2 font-medium">${m.name}</td>
