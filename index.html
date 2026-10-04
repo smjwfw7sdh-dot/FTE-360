@@ -62,7 +62,7 @@
     <div class="grid grid-cols-1 md:grid-cols-2 gap-5 mb-6">
       <!-- FTE principal -->
       <div id="dropZoneFte" class="drop-zone border-2 border-dashed border-slate-300 rounded-xl p-8 text-center bg-white hover:border-accent-500 cursor-pointer relative">
-        <div id="fteLoadedOverlay" class="hidden absolute inset-0 bg-emerald-50/95 rounded-xl flex flex-col items-center justify-center z-10">
+        <div id="fteLoadedOverlay" class="hidden absolute inset-0 bg-emerald-50/95 rounded-xl flex flex-col items-center justify-center z-10" style="display:none">
           <svg class="h-10 w-10 text-emerald-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
           <p class="font-medium text-emerald-800 text-sm" id="fteFileName">Archivo FTE cargado</p>
           <button type="button" id="btnClearFte" class="mt-2 text-xs text-emerald-700 underline hover:no-underline">Cambiar archivo</button>
@@ -76,7 +76,7 @@
 
       <!-- Horario gerencial -->
       <div id="dropZoneMgr" class="drop-zone border-2 border-dashed border-slate-300 rounded-xl p-8 text-center bg-white hover:border-accent-500 cursor-pointer relative">
-        <div id="mgrLoadedOverlay" class="hidden absolute inset-0 bg-emerald-50/95 rounded-xl flex flex-col items-center justify-center z-10">
+        <div id="mgrLoadedOverlay" class="hidden absolute inset-0 bg-emerald-50/95 rounded-xl flex flex-col items-center justify-center z-10" style="display:none">
           <svg class="h-10 w-10 text-emerald-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
           <p class="font-medium text-emerald-800 text-sm" id="mgrFileNameInit">Horario gerencial cargado</p>
           <button type="button" id="btnClearMgrInit" class="mt-2 text-xs text-emerald-700 underline hover:no-underline">Cambiar archivo</button>
@@ -1481,17 +1481,21 @@ function updateUploadUI() {
   if (fteOverlay) {
     if (pendingFte) {
       fteOverlay.classList.remove('hidden');
+      fteOverlay.style.display = 'flex';
       if (fteName) fteName.textContent = pendingFte.fileName;
     } else {
       fteOverlay.classList.add('hidden');
+      fteOverlay.style.display = 'none';
     }
   }
   if (mgrOverlay) {
     if (pendingMgr) {
       mgrOverlay.classList.remove('hidden');
+      mgrOverlay.style.display = 'flex';
       if (mgrName) mgrName.textContent = pendingMgr.fileName;
     } else {
       mgrOverlay.classList.add('hidden');
+      mgrOverlay.style.display = 'none';
     }
   }
   if (genBar) {
@@ -1591,7 +1595,7 @@ function runGeneration(withManagers) {
   const btnClearFte = document.getElementById('btnClearFte');
   const btnClearMgrInit = document.getElementById('btnClearMgrInit');
 
-  function bindDrop(zone, onFile) {
+  function bindDrop(zone, input, onFile) {
     if (!zone) return;
     zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
     zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
@@ -1600,10 +1604,14 @@ function runGeneration(withManagers) {
       zone.classList.remove('dragover');
       if (e.dataTransfer.files.length) onFile(e.dataTransfer.files[0]);
     });
+    zone.addEventListener('click', e => {
+      if (e.target.closest('button')) return;
+      if (input) input.click();
+    });
   }
 
-  bindDrop(dropFte, handleFtePending);
-  bindDrop(dropMgr, handleMgrPending);
+  bindDrop(dropFte, fileInput, handleFtePending);
+  bindDrop(dropMgr, mgrInput, handleMgrPending);
 
   if (fileInput) fileInput.addEventListener('change', e => {
     if (e.target.files.length) handleFtePending(e.target.files[0]);
