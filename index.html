@@ -54,18 +54,65 @@
 <main class="max-w-7xl mx-auto px-4 py-8">
 
   <section id="uploadSection" class="mb-8">
-    <div id="dropZone" class="drop-zone border-2 border-dashed border-slate-300 rounded-xl p-12 text-center bg-white hover:border-accent-500 cursor-pointer">
-      <svg class="mx-auto h-14 w-14 text-slate-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
-      <h2 class="text-lg font-medium text-slate-700 mb-1">Arrastra aquí el Excel de FTE 360°</h2>
-      <p class="text-slate-500 text-sm mb-4">Soporta FTE3.xlsx con disponibilidad, fortalezas y ciclos</p>
-      <input type="file" id="fileInput" accept=".xlsx,.xls" class="hidden" />
-      <button onclick="document.getElementById('fileInput').click()" class="inline-flex items-center px-5 py-2.5 bg-accent-600 text-white text-sm font-medium rounded-lg hover:bg-accent-700">Seleccionar archivo</button>
+    <div class="text-center mb-6">
+      <h2 class="text-xl font-semibold text-primary-800">Carga de archivos</h2>
+      <p class="text-sm text-slate-500 mt-1">Sube el Excel de FTE 360° y el horario gerencial. Cuando ambos estén listos, genera el horario definitivo.</p>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-5 mb-6">
+      <!-- FTE principal -->
+      <div id="dropZoneFte" class="drop-zone border-2 border-dashed border-slate-300 rounded-xl p-8 text-center bg-white hover:border-accent-500 cursor-pointer relative">
+        <div id="fteLoadedOverlay" class="hidden absolute inset-0 bg-emerald-50/95 rounded-xl flex flex-col items-center justify-center z-10">
+          <svg class="h-10 w-10 text-emerald-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+          <p class="font-medium text-emerald-800 text-sm" id="fteFileName">Archivo FTE cargado</p>
+          <button type="button" id="btnClearFte" class="mt-2 text-xs text-emerald-700 underline hover:no-underline">Cambiar archivo</button>
+        </div>
+        <svg class="mx-auto h-12 w-12 text-slate-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        <h3 class="text-base font-medium text-slate-700 mb-1">1. Excel FTE 360°</h3>
+        <p class="text-slate-500 text-xs mb-3">Disponibilidad, fortalezas, ciclos, daypart y forecast</p>
+        <input type="file" id="fileInput" accept=".xlsx,.xls" class="hidden" />
+        <button type="button" onclick="document.getElementById('fileInput').click()" class="inline-flex items-center px-4 py-2 bg-accent-600 text-white text-sm font-medium rounded-lg hover:bg-accent-700">Seleccionar FTE</button>
+      </div>
+
+      <!-- Horario gerencial -->
+      <div id="dropZoneMgr" class="drop-zone border-2 border-dashed border-slate-300 rounded-xl p-8 text-center bg-white hover:border-accent-500 cursor-pointer relative">
+        <div id="mgrLoadedOverlay" class="hidden absolute inset-0 bg-emerald-50/95 rounded-xl flex flex-col items-center justify-center z-10">
+          <svg class="h-10 w-10 text-emerald-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+          <p class="font-medium text-emerald-800 text-sm" id="mgrFileNameInit">Horario gerencial cargado</p>
+          <button type="button" id="btnClearMgrInit" class="mt-2 text-xs text-emerald-700 underline hover:no-underline">Cambiar archivo</button>
+        </div>
+        <svg class="mx-auto h-12 w-12 text-slate-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+        <h3 class="text-base font-medium text-slate-700 mb-1">2. Horario gerencial</h3>
+        <p class="text-slate-500 text-xs mb-3">Columnas: Nombre, Lun–Dom con códigos A / M / RG / RA / C / T / L</p>
+        <input type="file" id="mgrFileInputInit" accept=".xlsx,.xls" class="hidden" />
+        <button type="button" onclick="document.getElementById('mgrFileInputInit').click()" class="inline-flex items-center px-4 py-2 bg-slate-700 text-white text-sm font-medium rounded-lg hover:bg-slate-800">Seleccionar gerencia</button>
+      </div>
+    </div>
+
+    <!-- Botón generar cuando ambos están cargados -->
+    <div id="generateBar" class="hidden">
+      <div class="bg-white rounded-xl border border-slate-200 p-5 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm">
+        <div class="text-center sm:text-left">
+          <p class="font-medium text-primary-800">Archivos listos</p>
+          <p class="text-sm text-slate-500">FTE + horario gerencial cargados. Genera el horario definitivo.</p>
+        </div>
+        <button id="btnGenerate" class="w-full sm:w-auto px-8 py-3 bg-accent-600 text-white text-base font-semibold rounded-lg hover:bg-accent-700 shadow-sm">
+          Generar horario definitivo
+        </button>
+      </div>
+    </div>
+
+    <p class="text-center text-xs text-slate-400 mt-4">También puedes cargar solo el FTE y generar con relleno automático de gerencia.</p>
+    <div id="fteOnlyBar" class="hidden mt-3 text-center">
+      <button id="btnGenerateFteOnly" class="px-5 py-2 border border-slate-300 text-slate-700 text-sm font-medium rounded-lg hover:bg-slate-50">
+        Generar solo con FTE (relleno automático)
+      </button>
     </div>
   </section>
 
   <div id="loading" class="hidden text-center py-16">
     <div class="inline-block animate-spin rounded-full h-10 w-10 border-4 border-accent-600 border-t-transparent"></div>
-    <p class="mt-4 text-slate-600">Procesando Excel y generando horario óptimo...</p>
+    <p class="mt-4 text-slate-600">Procesando archivos y generando horario definitivo...</p>
   </div>
 
   <div id="app" class="hidden">
@@ -97,6 +144,7 @@
           <div class="bg-slate-50 rounded-lg p-3 text-center"><p class="text-xs text-slate-500">Crew Master</p><p id="mMaster" class="text-xl font-semibold text-accent-600">—</p></div>
           <div class="bg-slate-50 rounded-lg p-3 text-center"><p class="text-xs text-slate-500">Cobertura media</p><p id="mCover" class="text-xl font-semibold text-emerald-600">—</p></div>
         </div>
+        <div id="complianceBox" class="mt-4 text-sm text-slate-600"></div>
       </div>
       <div id="scheduleByDay" class="space-y-4"></div>
 
@@ -388,8 +436,6 @@ function processWorkbook(wb) {
     managerScheduleLoaded: !!prevLoaded,
     managerSourceFile: prevSrc || null
   };
-  renderBase();
-  generateSchedule();
 }
 
 function generateSchedule() {
@@ -408,16 +454,28 @@ function generateSchedule() {
     'Jueves': 12, 'Viernes': 12, 'Sábado': 11, 'Domingo': 10
   };
 
-  // Max work days from cycle string e.g. "4x3" -> 4 work days
-  function workDaysFromCycle(cycle, weeklyH) {
-    const c = (cycle || '').toString().toLowerCase().replace(/\s/g,'');
+  // Días de trabajo y rango de turno según jornada contratada + ciclo del Excel
+  // 42h → 5x2 · 30h → 4x3 fijo · 20h → 4x3 o 3x4 (según ciclo) · 16h → 2x5
+  function rulesFor(p) {
+    const weekly = Number(p.weeklyHours) || 0;
+    const c = (p.cycle || '').toString().toLowerCase().replace(/\s/g, '');
     const m = c.match(/(\d+)\s*x\s*(\d+)/);
-    if (m) return Math.max(1, parseInt(m[1], 10));
-    // fallback by hours
-    if (weeklyH >= 40) return 5;
-    if (weeklyH >= 28) return 4;
-    if (weeklyH >= 18) return 3;
-    return 2;
+    let workDays = m ? Math.max(1, parseInt(m[1], 10)) : 0;
+    if (weekly >= 40) workDays = 5;          // 42h → 5x2
+    else if (weekly >= 28 && weekly < 40) workDays = 4; // 30h → 4x3 fijo
+    else if (weekly > 0 && weekly <= 17) workDays = 2;  // 16h → 2x5
+    else if (!workDays) {
+      if (weekly >= 18) workDays = 3;
+      else workDays = 2;
+    }
+    // Horas por turno para acercarse a la jornada contratada
+    const targetShift = workDays ? weekly / workDays : 6;
+    const minShift = Math.max(4, Math.min(8, Math.floor(targetShift - 1.5)));
+    const maxShift = Math.min(10, Math.max(minShift, Math.ceil(targetShift + 1.5)));
+    return { workDays, minShift, maxShift, weekly, targetShift };
+  }
+  function workDaysFromCycle(cycle, weeklyH) {
+    return rulesFor({ cycle, weeklyHours: weeklyH }).workDays;
   }
 
   const peakDays = new Set(['Jueves','Viernes','Sábado']);
@@ -472,7 +530,10 @@ function generateSchedule() {
   const slotPeople = {}; // day -> slotIdx -> [{id, strength, isMaster}]
   DAYS.forEach(d => { slotPeople[d] = {}; });
 
-  DAYS.forEach((day, dayIdx) => {
+  // Días pico primero para que quien tiene pocos días cubra jueves–sábado
+  const dayOrder = ['Jueves','Viernes','Sábado','Domingo','Lunes','Martes','Miércoles'];
+  dayOrder.forEach((day) => {
+    const dayIdx = DAYS.indexOf(day);
     const dayKey = DAY_KEYS[dayIdx];
     const dayTickets = dailyTickets[day] || avgDaily;
     const idealN = IDEAL_HEADCOUNT[day] || 10;
@@ -512,18 +573,24 @@ function generateSchedule() {
     let candidates = state.team
       .filter(p => {
         const av = state.availability[p.id];
-        if (!av || !av[dayKey] || remaining[p.id] < MIN_SHIFT_H) return false;
-        const maxDays = workDaysFromCycle(p.cycle, p.weeklyHours);
-        if (daysWorked[p.id] >= maxDays) return false;
+        const rules = rulesFor(p);
+        if (!av || !av[dayKey] || remaining[p.id] < rules.minShift) return false;
+        if (daysWorked[p.id] >= rules.workDays) return false;
         return true;
       })
-      .map(p => ({
-        ...p,
-        windows: state.availability[p.id][dayKey],
-        assignedToday: 0,
-        breakMin: colacionMin(p),
-        maxDays: workDaysFromCycle(p.cycle, p.weeklyHours)
-      }));
+      .map(p => {
+        const rules = rulesFor(p);
+        return {
+          ...p,
+          windows: state.availability[p.id][dayKey],
+          assignedToday: 0,
+          breakMin: colacionMin(p),
+          maxDays: rules.workDays,
+          minShift: rules.minShift,
+          maxShift: rules.maxShift,
+          targetShift: rules.targetShift
+        };
+      });
     candidates = shuffle(candidates);
 
     const assignedTodayIds = new Set();
@@ -532,8 +599,10 @@ function generateSchedule() {
       if (assignedTodayIds.has(person.id)) return false;
       if (daysWorked[person.id] >= person.maxDays) return false;
       const hours = (endIdx - startIdx + 1) * HALF;
-      if (hours < MIN_SHIFT_H || hours > MAX_SHIFT_H) return false;
-      if (hours > remaining[person.id] - person.assignedToday) return false;
+      const minH = person.minShift || MIN_SHIFT_H;
+      const maxH = person.maxShift || MAX_SHIFT_H;
+      if (hours < minH || hours > maxH) return false;
+      if (hours > remaining[person.id] - person.assignedToday + 0.01) return false;
       if (!isInWindow(slots[startIdx].start, slots[endIdx].end, person.windows)) return false;
 
       for (let i = startIdx; i <= endIdx; i++) {
@@ -560,72 +629,91 @@ function generateSchedule() {
       shifts.push({
         empId: person.id, name: person.name, role: person.role, strength: person.strength,
         day, start: startT, end: endT, hours, breakMin: person.breakMin, type,
-        isMaster: (person.role||'').toLowerCase().includes('master')
+        isMaster: (person.role||'').toLowerCase().includes('master'),
+        isCloser: !!person._asCloser
       });
       return true;
     }
 
-    // Score block: demand + strength continuity (handoff same fortaleza)
+    // Score: demanda + relevo de la misma fortaleza (AM sale, entra PM de la misma estación)
     function blockScore(person, s, e) {
       let score = 0;
       const sk = strengthKey(person);
       const isMaster = (person.role||'').toLowerCase().includes('master');
       for (let i = s; i <= e; i++) {
         const need = (slots[i].required || 1) - coverage[day][i];
-        if (need > 0) score += need * 16;
-        else score -= 3;
-        // Strength handoff: if previous slot has same strength leaving / gap, bonus
+        if (need > 0) score += need * 14;
+        else score -= 4;
         if (i > 0) {
-          const prev = slotPeople[day][i-1] || [];
-          const sameStr = prev.some(x => x.strength === sk);
-          if (sameStr) score += 8; // continuity of station
+          const prev = slotPeople[day][i - 1] || [];
+          const sameLeaving = prev.filter(x => x.strength === sk);
+          const stillHere = (slotPeople[day][i] || []).some(x => x.strength === sk);
+          // Relevo: la fortaleza estaba y en este slot aún no hay nadie de esa fortaleza
+          if (sameLeaving.length && !stillHere) score += 28;
+          else if (sameLeaving.length) score += 10;
         }
-        // Prefer master covering gaps where no master yet
         if (isMaster) {
           const hasMaster = (slotPeople[day][i] || []).some(x => x.isMaster);
-          if (!hasMaster) score += 6;
+          if (!hasMaster) score += 18; // siempre un master en estación
         }
       }
-      score += (e - s + 1) * HALF * 1.2;
-      score += Math.random() * 4;
+      // Acercar el turno a la jornada diaria objetivo (42/5, 30/4, 20/3 o 4, 16/2)
+      const hours = (e - s + 1) * HALF;
+      const target = person.targetShift || 7;
+      score -= Math.abs(hours - target) * 6;
+      // Priorizar a quien aún le faltan días de su ciclo
+      const daysLeft = (person.maxDays || 5) - daysWorked[person.id];
+      if (daysLeft > 0) score += daysLeft * 6;
+      score += Math.random() * 2;
       return score;
     }
 
-    // PHASE 0: mandatory closers (3)
-    const canClose = shuffle(candidates.filter(p => {
-      for (const w of p.windows) {
-        for (const i of closeSlotIdxs) {
-          if (slots[i] && isInWindow(slots[i].start, slots[i].end, [w])) return true;
-        }
-      }
-      return false;
-    }));
-    const closerIds = new Set();
-    for (const person of canClose) {
-      if (closerIds.size >= MIN_CLOSERS) break;
-      if (assignedTodayIds.has(person.id)) continue;
-      if (remaining[person.id] < MIN_SHIFT_H) continue;
-      let best = null;
-      for (const w of person.windows) {
-        for (let s = 0; s < slots.length; s++) {
-          for (let e = s; e < slots.length; e++) {
-            const hours = (e - s + 1) * HALF;
-            if (hours < MIN_SHIFT_H || hours > MAX_SHIFT_H) continue;
-            if (hours > remaining[person.id]) continue;
-            if (!isInWindow(slots[s].start, slots[e].end, [w])) continue;
-            let coversClose = 0, coversOp = 0;
-            for (let i = s; i <= e; i++) {
-              if (closeSlotIdxs.includes(i)) coversClose++;
-              else coversOp++;
-            }
-            if (coversClose === 0) continue;
-            const score = coversClose * 20 + coversOp * 5 + hours + blockScore(person, s, e) * 0.3;
-            if (!best || score > best.score) best = { s, e, score };
+    // PHASE 0: 3 cierres obligatorios. Cuentan en la dotación del día.
+    function pickCloser(relaxed) {
+      const canClose = shuffle(candidates.filter(p => {
+        if (assignedTodayIds.has(p.id) || daysWorked[p.id] >= p.maxDays) return false;
+        for (const w of p.windows) {
+          for (const i of closeSlotIdxs) {
+            if (slots[i] && isInWindow(slots[i].start, slots[i].end, [w])) return true;
           }
         }
+        return false;
+      }));
+      for (const person of canClose) {
+        if (closerIds.size >= MIN_CLOSERS) break;
+        if (remaining[person.id] < 4) continue;
+        let best = null;
+        for (const w of person.windows) {
+          for (let s = 0; s < slots.length; s++) {
+            for (let e = s; e < slots.length; e++) {
+              const hours = (e - s + 1) * HALF;
+              const minH = relaxed ? 4 : (person.minShift || MIN_SHIFT_H);
+              const maxH = person.maxShift || MAX_SHIFT_H;
+              if (hours < minH || hours > maxH) continue;
+              if (hours > remaining[person.id]) continue;
+              if (!isInWindow(slots[s].start, slots[e].end, [w])) continue;
+              let coversClose = 0;
+              for (let i = s; i <= e; i++) if (closeSlotIdxs.includes(i)) coversClose++;
+              if (coversClose < 2) continue;
+              const score = coversClose * 30 + hours;
+              if (!best || score > best.score) best = { s, e, score };
+            }
+          }
+        }
+        if (best) {
+          person._asCloser = true;
+          if (tryAssignBlock(person, best.s, best.e)) {
+            closerIds.add(person.id);
+            const last = shifts[shifts.length - 1];
+            if (last && last.empId === person.id && last.day === day) last.type = 'CIERRE';
+          }
+          person._asCloser = false;
+        }
       }
-      if (best && tryAssignBlock(person, best.s, best.e)) closerIds.add(person.id);
     }
+    const closerIds = new Set();
+    pickCloser(false);
+    if (closerIds.size < MIN_CLOSERS) pickCloser(true);
 
     // PHASE 1: reach ideal headcount for the day + cover demand
     // Target: assignedTodayIds.size ~= idealN
@@ -647,8 +735,10 @@ function generateSchedule() {
           for (let s = 0; s < slots.length; s++) {
             for (let e = s; e < slots.length; e++) {
               const hours = (e - s + 1) * HALF;
-              if (hours < MIN_SHIFT_H) continue;
-              if (hours > MAX_SHIFT_H) break;
+              const minH = person.minShift || MIN_SHIFT_H;
+              const maxH = person.maxShift || MAX_SHIFT_H;
+              if (hours < minH) continue;
+              if (hours > maxH) break;
               if (hours > remaining[person.id] - person.assignedToday) break;
               if (!isInWindow(slots[s].start, slots[e].end, [w])) continue;
 
@@ -803,6 +893,27 @@ function generateSchedule() {
   const coverPct = totalSlots ? Math.round(covered / totalSlots * 100) : 0;
   const contracted = state.team.reduce((s, p) => s + (p.weeklyHours || 0), 0);
 
+  // Cumplimiento por persona: días del ciclo y horas contratadas
+  const byPersonHours = {};
+  const byPersonDays = {};
+  shifts.filter(s => !s.isManager).forEach(s => {
+    byPersonHours[s.empId] = (byPersonHours[s.empId] || 0) + s.hours;
+    if (!byPersonDays[s.empId]) byPersonDays[s.empId] = new Set();
+    byPersonDays[s.empId].add(s.day);
+  });
+  const compliance = state.team.map(p => {
+    const rules = rulesFor(p);
+    const gotH = Math.round((byPersonHours[p.id] || 0) * 10) / 10;
+    const gotD = byPersonDays[p.id] ? byPersonDays[p.id].size : 0;
+    const okDays = gotD === rules.workDays;
+    const okHours = Math.abs(gotH - rules.weekly) <= 2;
+    return { id: p.id, name: p.name, weekly: rules.weekly, cycle: p.cycle, workDays: rules.workDays, gotH, gotD, okDays, okHours };
+  });
+  const dayHeadcount = {};
+  DAYS.forEach(d => {
+    dayHeadcount[d] = new Set(shifts.filter(s => s.day === d && !s.isManager).map(s => s.empId)).size;
+  });
+
   state.generated = {
     shifts, coverage, slots,
     metrics: {
@@ -813,8 +924,13 @@ function generateSchedule() {
       coverPct,
       contractedHours: contracted,
       targetWeekly: 560,
+      hoursGap: Math.round((560 - totalHoursCrew) * 10) / 10,
       mgrFills: mgrFills.length,
-      idealNote: 'L10 M9 X9 J12 V12 S11 D10'
+      idealNote: 'L10 M9 X9 J12 V12 S11 D10',
+      compliance,
+      dayHeadcount,
+      cycleOk: compliance.filter(c => c.okDays).length,
+      hoursOk: compliance.filter(c => c.okHours).length
     }
   };
   renderSchedule();
@@ -862,6 +978,30 @@ function renderSchedule() {
   if (elCrew) elCrew.textContent = uniqueCrew.size;
   if (elMaster) elMaster.textContent = uniqueMaster.size;
   document.getElementById('mCover').textContent=g.metrics.coverPct+'%';
+  const box = document.getElementById('complianceBox');
+  if (box && g.metrics.compliance) {
+    const IDEAL = { Lunes:10, Martes:9, 'Miércoles':9, Jueves:12, Viernes:12, 'Sábado':11, Domingo:10 };
+    const daysLine = DAYS.map(d => {
+      const got = (g.metrics.dayHeadcount && g.metrics.dayHeadcount[d]) || 0;
+      const ideal = IDEAL[d];
+      const cls = got === ideal ? 'text-emerald-700' : (got < ideal ? 'text-red-700' : 'text-amber-700');
+      return `<span class="${cls}">${d.slice(0,3)} ${got}/${ideal}</span>`;
+    }).join(' · ');
+    const bad = g.metrics.compliance.filter(c => !c.okDays || !c.okHours).slice(0, 8);
+    const badTxt = bad.length
+      ? bad.map(c => `${c.name}: ${c.gotD}/${c.workDays} días, ${c.gotH}/${c.weekly}h`).join(' · ')
+      : 'Todos dentro de ciclo y jornada (±2 h).';
+    box.innerHTML = `
+      <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <p><strong>Meta semanal crew:</strong> ${g.metrics.totalHours} h de 560 h contratadas/objetivo
+          <span class="text-slate-500">(contratadas en equipo: ${g.metrics.contractedHours} h)</span></p>
+        <p class="mt-1"><strong>Ciclo:</strong> ${g.metrics.cycleOk}/${g.metrics.compliance.length} con días exactos
+          · <strong>Jornada:</strong> ${g.metrics.hoursOk}/${g.metrics.compliance.length} dentro de ±2 h</p>
+        <p class="mt-1"><strong>Dotación vs ideal:</strong> ${daysLine}</p>
+        <p class="mt-1 text-xs text-slate-500"><strong>Cierre:</strong> 3 personas de cierre todos los días; entran en el horario y en la dotación del día. <strong>Relevo:</strong> misma fortaleza y Crew Master al cambiar de turno.</p>
+        <p class="mt-1 text-xs">${badTxt}</p>
+      </div>`;
+  }
   // Show weekly hours vs contracted (~560)
   const hoursEl = document.getElementById('mHours');
   if (hoursEl && g.metrics.contractedHours) {
@@ -874,7 +1014,9 @@ function renderSchedule() {
     const nMaster = dayShifts.filter(s => s.isMaster || (s.role||'').toLowerCase().includes('master')).length;
     const rows=dayShifts.map(s=>`<tr class="hover:bg-slate-50"><td class="px-3 py-1.5 font-medium">${s.name}</td><td class="px-3 py-1.5 text-xs">${s.role}${s.strength?' · '+s.strength:''}</td><td class="px-3 py-1.5 font-mono">${s.start}</td><td class="px-3 py-1.5 font-mono">${s.end}</td><td class="px-3 py-1.5 text-right">${s.hours}h</td><td class="px-3 py-1.5 text-xs">${s.breakMin?s.breakMin+' min':'—'}</td><td class="px-3 py-1.5"><span class="text-xs px-2 py-0.5 rounded bg-slate-100">${s.type}</span></td></tr>`).join('');
     const dayHours=dayShifts.reduce((s,x)=>s+x.hours,0);
-    return `<div class="bg-white rounded-xl border border-slate-200 overflow-hidden"><div class="px-4 py-3 bg-slate-50 border-b border-slate-100 flex flex-wrap justify-between items-center gap-2"><h3 class="font-semibold text-primary-800">${day}</h3><span class="text-sm text-slate-500">${dayShifts.length} personas · ${Math.round(dayHours*10)/10}h · <strong>${nCrew} Crew</strong> · <strong class="text-accent-600">${nMaster} Master</strong> · ideal ${({Lunes:10,Martes:9,'Miércoles':9,Jueves:12,Viernes:12,'Sábado':11,Domingo:10})[day]||'—'}</span></div><div class="scroll-x"><table class="w-full text-sm"><thead><tr class="text-slate-500 text-xs"><th class="px-3 py-2 text-left">Persona</th><th class="px-3 py-2 text-left">Cargo / Fortaleza</th><th class="px-3 py-2 text-left">Inicio</th><th class="px-3 py-2 text-left">Fin</th><th class="px-3 py-2 text-right">Horas</th><th class="px-3 py-2 text-left">Colación</th><th class="px-3 py-2 text-left">Tipo</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    const nClosers = dayShifts.filter(s => s.type === 'CIERRE' || s.isCloser).length;
+    const closerCls = nClosers >= 3 ? 'text-emerald-700' : 'text-red-700';
+    return `<div class="bg-white rounded-xl border border-slate-200 overflow-hidden"><div class="px-4 py-3 bg-slate-50 border-b border-slate-100 flex flex-wrap justify-between items-center gap-2"><h3 class="font-semibold text-primary-800">${day}</h3><span class="text-sm text-slate-500">${dayShifts.length} personas (incl. cierre) · ${Math.round(dayHours*10)/10}h · <strong>${nCrew} Crew</strong> · <strong class="text-accent-600">${nMaster} Master</strong> · <strong class="${closerCls}">${nClosers}/3 cierre</strong> · ideal ${({Lunes:10,Martes:9,'Miércoles':9,Jueves:12,Viernes:12,'Sábado':11,Domingo:10})[day]||'—'}</span></div><div class="scroll-x"><table class="w-full text-sm"><thead><tr class="text-slate-500 text-xs"><th class="px-3 py-2 text-left">Persona</th><th class="px-3 py-2 text-left">Cargo / Fortaleza</th><th class="px-3 py-2 text-left">Inicio</th><th class="px-3 py-2 text-left">Fin</th><th class="px-3 py-2 text-right">Horas</th><th class="px-3 py-2 text-left">Colación</th><th class="px-3 py-2 text-left">Tipo</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
   }).join('');
 }
 
@@ -1209,22 +1351,166 @@ function exportExcel() {
   XLSX.writeFile(wb,`Horario_${suffix}_${(state.store||'Tienda').replace(/\s+/g,'_')}_${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 
-const dropZone=document.getElementById('dropZone'), fileInput=document.getElementById('fileInput');
-dropZone.addEventListener('dragover',e=>{e.preventDefault();dropZone.classList.add('dragover');});
-dropZone.addEventListener('dragleave',()=>dropZone.classList.remove('dragover'));
-dropZone.addEventListener('drop',e=>{e.preventDefault();dropZone.classList.remove('dragover');if(e.dataTransfer.files.length)handleFile(e.dataTransfer.files[0]);});
-dropZone.addEventListener('click',()=>fileInput.click());
-fileInput.addEventListener('change',e=>{if(e.target.files.length)handleFile(e.target.files[0]);});
+// --- Estado pendiente de archivos en pantalla inicial ---
+let pendingFte = null;  // { wb, fileName }
+let pendingMgr = null;  // { wb, fileName }
 
-function handleFile(file){
-  if(!file.name.match(/\.xlsx?$/i)){alert('Sube un archivo Excel (.xlsx)');return;}
+function updateUploadUI() {
+  const fteOverlay = document.getElementById('fteLoadedOverlay');
+  const mgrOverlay = document.getElementById('mgrLoadedOverlay');
+  const fteName = document.getElementById('fteFileName');
+  const mgrName = document.getElementById('mgrFileNameInit');
+  const genBar = document.getElementById('generateBar');
+  const fteOnlyBar = document.getElementById('fteOnlyBar');
+
+  if (fteOverlay) {
+    if (pendingFte) {
+      fteOverlay.classList.remove('hidden');
+      if (fteName) fteName.textContent = pendingFte.fileName;
+    } else {
+      fteOverlay.classList.add('hidden');
+    }
+  }
+  if (mgrOverlay) {
+    if (pendingMgr) {
+      mgrOverlay.classList.remove('hidden');
+      if (mgrName) mgrName.textContent = pendingMgr.fileName;
+    } else {
+      mgrOverlay.classList.add('hidden');
+    }
+  }
+  if (genBar) {
+    if (pendingFte && pendingMgr) genBar.classList.remove('hidden');
+    else genBar.classList.add('hidden');
+  }
+  if (fteOnlyBar) {
+    if (pendingFte && !pendingMgr) fteOnlyBar.classList.remove('hidden');
+    else fteOnlyBar.classList.add('hidden');
+  }
+}
+
+function readExcelFile(file) {
+  return new Promise((resolve, reject) => {
+    if (!file || !file.name.match(/\.xlsx?$/i)) {
+      reject(new Error('Sube un archivo Excel (.xlsx o .xls)'));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array', cellDates: true });
+        resolve(wb);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = () => reject(new Error('No se pudo leer el archivo'));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+async function handleFtePending(file) {
+  try {
+    const wb = await readExcelFile(file);
+    pendingFte = { wb, fileName: file.name };
+    updateUploadUI();
+  } catch (err) {
+    alert(err.message || String(err));
+  }
+}
+
+async function handleMgrPending(file) {
+  try {
+    const wb = await readExcelFile(file);
+    pendingMgr = { wb, fileName: file.name };
+    updateUploadUI();
+  } catch (err) {
+    alert(err.message || String(err));
+  }
+}
+
+function runGeneration(withManagers) {
+  if (!pendingFte) {
+    alert('Carga primero el Excel de FTE 360°.');
+    return;
+  }
   document.getElementById('loading').classList.remove('hidden');
   document.getElementById('uploadSection').classList.add('hidden');
-  const reader=new FileReader();
-  reader.onload=e=>{try{const wb=XLSX.read(new Uint8Array(e.target.result),{type:'array',cellDates:true});processWorkbook(wb);}
-    catch(err){console.error(err);alert('Error: '+err.message);document.getElementById('loading').classList.add('hidden');document.getElementById('uploadSection').classList.remove('hidden');}};
-  reader.readAsArrayBuffer(file);
+
+  setTimeout(() => {
+    try {
+      if (withManagers && pendingMgr) {
+        processManagerWorkbook(pendingMgr.wb, pendingMgr.fileName);
+      } else {
+        state.managerScheduleLoaded = false;
+        state.managerSourceFile = null;
+        state.managers = DEFAULT_MANAGERS.map(m => ({ ...m }));
+        state.managerShifts = {};
+      }
+      processWorkbook(pendingFte.wb);
+      renderBase();
+      generateSchedule();
+      const h2 = document.querySelector('#tab-horario h2');
+      if (h2) {
+        h2.textContent = state.managerScheduleLoaded
+          ? 'Horario definitivo (crew + gerencia)'
+          : 'Horario óptimo generado';
+      }
+      document.getElementById('loading').classList.add('hidden');
+    } catch (err) {
+      console.error(err);
+      alert('Error al generar: ' + err.message);
+      document.getElementById('loading').classList.add('hidden');
+      document.getElementById('uploadSection').classList.remove('hidden');
+    }
+  }, 80);
 }
+
+(function initInitialUploads() {
+  const dropFte = document.getElementById('dropZoneFte');
+  const dropMgr = document.getElementById('dropZoneMgr');
+  const fileInput = document.getElementById('fileInput');
+  const mgrInput = document.getElementById('mgrFileInputInit');
+  const btnGen = document.getElementById('btnGenerate');
+  const btnFteOnly = document.getElementById('btnGenerateFteOnly');
+  const btnClearFte = document.getElementById('btnClearFte');
+  const btnClearMgrInit = document.getElementById('btnClearMgrInit');
+
+  function bindDrop(zone, onFile) {
+    if (!zone) return;
+    zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+    zone.addEventListener('drop', e => {
+      e.preventDefault();
+      zone.classList.remove('dragover');
+      if (e.dataTransfer.files.length) onFile(e.dataTransfer.files[0]);
+    });
+  }
+
+  bindDrop(dropFte, handleFtePending);
+  bindDrop(dropMgr, handleMgrPending);
+
+  if (fileInput) fileInput.addEventListener('change', e => {
+    if (e.target.files.length) handleFtePending(e.target.files[0]);
+  });
+  if (mgrInput) mgrInput.addEventListener('change', e => {
+    if (e.target.files.length) handleMgrPending(e.target.files[0]);
+  });
+  if (btnGen) btnGen.addEventListener('click', () => runGeneration(true));
+  if (btnFteOnly) btnFteOnly.addEventListener('click', () => runGeneration(false));
+  if (btnClearFte) btnClearFte.addEventListener('click', e => {
+    e.stopPropagation();
+    pendingFte = null;
+    if (fileInput) fileInput.value = '';
+    updateUploadUI();
+  });
+  if (btnClearMgrInit) btnClearMgrInit.addEventListener('click', e => {
+    e.stopPropagation();
+    pendingMgr = null;
+    if (mgrInput) mgrInput.value = '';
+    updateUploadUI();
+  });
+})();
 
 document.querySelectorAll('.tab-btn').forEach(btn=>{
   btn.addEventListener('click',()=>{
