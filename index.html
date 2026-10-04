@@ -83,7 +83,7 @@
         </div>
         <svg class="mx-auto h-12 w-12 text-slate-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
         <h3 class="text-base font-medium text-slate-700 mb-1">2. Horario gerencial</h3>
-        <p class="text-slate-500 text-xs mb-3">Columnas: Nombre, Lun–Dom con códigos A / M / RG / RA / C / T / L</p>
+        <p class="text-slate-500 text-xs mb-3">Formato distrito: hoja «Formato Gerencial», semanas L M M J V S D, códigos A / AC / R / RC / C / CC / T / TC / L</p>
         <input type="file" id="mgrFileInputInit" accept=".xlsx,.xls" class="hidden" />
         <button type="button" onclick="document.getElementById('mgrFileInputInit').click()" class="inline-flex items-center px-4 py-2 bg-slate-700 text-white text-sm font-medium rounded-lg hover:bg-slate-800">Seleccionar gerencia</button>
       </div>
@@ -94,7 +94,8 @@
       <div class="bg-white rounded-xl border border-slate-200 p-5 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm">
         <div class="text-center sm:text-left">
           <p class="font-medium text-primary-800">Archivos listos</p>
-          <p class="text-sm text-slate-500">FTE + horario gerencial cargados. Genera el horario definitivo.</p>
+          <p class="text-sm text-slate-500">Elige la semana del horario gerencial y genera el definitivo.</p>
+          <div id="weekPicker" class="mt-2 flex flex-wrap gap-1"></div>
         </div>
         <button id="btnGenerate" class="w-full sm:w-auto px-8 py-3 bg-accent-600 text-white text-base font-semibold rounded-lg hover:bg-accent-700 shadow-sm">
           Generar horario definitivo
@@ -319,16 +320,21 @@ const DEFAULT_MANAGERS = [
 
 // Plantillas de turno gerencial (según horario BK)
 const MGR_SHIFT_TEMPLATES = {
-  'A':  { label: 'APERTURA',      start: '08:00', end: '17:00', hours: 9 },
-  'M':  { label: 'MEDIO GL',      start: '10:00', end: '19:00', hours: 9 },
-  'RG': { label: 'RETRASADO GL',  start: '12:00', end: '21:00', hours: 9 },
-  'RA': { label: 'RETRASADO ADM', start: '13:00', end: '22:00', hours: 9 },
-  'C':  { label: 'CIERRE',        start: '18:30', end: '03:30', hours: 9 },
-  'T':  { label: 'TRASNOCHE',     start: '20:00', end: '05:00', hours: 9 },
-  'L':  { label: 'LIBRE',         start: null,    end: null,    hours: 0 }
+  'A':  { label: 'APERTURA',        start: '08:00', end: '17:00', hours: 9 },
+  'AC': { label: 'APERTURA CORTA',  start: '08:00', end: '16:00', hours: 8 },
+  'M':  { label: 'MEDIO GL',        start: '10:00', end: '19:00', hours: 9 },
+  'R':  { label: 'RETRASADO',       start: '13:00', end: '22:00', hours: 9 },
+  'RG': { label: 'RETRASADO GL',    start: '12:00', end: '21:00', hours: 9 },
+  'RC': { label: 'RETRASADO CORTO', start: '13:00', end: '21:00', hours: 8 },
+  'RA': { label: 'RETRASADO ADM',   start: '13:00', end: '22:00', hours: 9 },
+  'C':  { label: 'CIERRE',          start: '16:00', end: '01:00', hours: 9 },
+  'CC': { label: 'CIERRE CORTO',    start: '17:00', end: '01:00', hours: 8 },
+  'T':  { label: 'TRASNOCHE',       start: '18:30', end: '03:30', hours: 9 },
+  'TC': { label: 'TRASNOCHE CORTO', start: '19:30', end: '03:30', hours: 8 },
+  'CM': { label: 'CREW MEETING',    start: '10:00', end: '19:00', hours: 9 },
+  'L':  { label: 'LIBRE',           start: null,    end: null,    hours: 0 }
 };
-
-const VALID_MGR_CODES = new Set(['A','M','RG','RA','C','T','L']);
+const VALID_MGR_CODES = new Set(Object.keys(MGR_SHIFT_TEMPLATES));
 
 
 function parseTime(val) {
@@ -1127,116 +1133,118 @@ function renderManagerGrid() {
   }
 }
 
-/** Normaliza código de turno gerencial */
+/** Normaliza código de turno gerencial (código, nombre o rango horario) */
 function normalizeMgrCode(val) {
   if (val == null || val === '') return 'L';
   let s = String(val).trim().toUpperCase().replace(/\s+/g, '');
-  // Aceptar nombres completos o abreviaturas
-  if (s === 'LIBRE' || s === 'OFF' || s === 'DESCANSO' || s === '-' || s === '0') return 'L';
-  if (s.startsWith('APERT') || s === 'A') return 'A';
-  if (s.startsWith('MEDIO') || s === 'M' || s === 'MED') return 'M';
-  if (s.includes('RETRASADO') && (s.includes('ADM') || s.includes('ADMIN'))) return 'RA';
-  if (s.includes('RETRASADO') || s === 'RG' || s === 'RET') return 'RG';
-  if (s.startsWith('CIERRE') || s === 'C') return 'C';
-  if (s.startsWith('TRAS') || s === 'T' || s === 'NOCHE') return 'T';
+  if (!s || ['LIBRE','OFF','DESCANSO','FRANCO','VACACIONES','V','X','-','0','CU'].includes(s)) return 'L';
+  const map = {
+    A:'A', AP:'A', APERTURA:'A',
+    AC:'AC', APERTURACORTA:'AC',
+    M:'M', MED:'M', MEDIO:'M',
+    R:'R', RET:'R', RETRASADO:'R', RG:'RG',
+    RC:'RC', RETRASADOCORTO:'RC',
+    RA:'RA',
+    C:'C', CIERRE:'C',
+    CC:'CC', CIERRECORTO:'CC',
+    T:'T', TRASNOCHE:'T',
+    TC:'TC', TRASNOCHECORTO:'TC',
+    CM:'CM', RCM:'CM', CREWMEETING:'CM'
+  };
+  if (map[s]) return map[s];
   if (VALID_MGR_CODES.has(s)) return s;
   return 'L';
 }
 
-/** Procesa Excel de horario gerencial */
 function processManagerWorkbook(wb, fileName) {
-  // Buscar hoja: GERENCIA, GERENCIAL, HORARIO GERENCIAL o la primera
-  const sheetNames = wb.SheetNames || [];
-  let sheet = wb.Sheets['GERENCIA'] || wb.Sheets['GERENCIAL'] || wb.Sheets['HORARIO GERENCIAL'] ||
-              wb.Sheets['Horario Gerencial'] || wb.Sheets[sheetNames[0]];
-  if (!sheet) throw new Error('No se encontró ninguna hoja en el Excel de gerencia');
+  const names = wb.SheetNames || [];
+  const preferred = names.find(n => /formato\s*gerencial/i.test(n))
+    || names.find(n => /gerencial|gerencia|horario/i.test(n))
+    || names[0];
+  const sheet = wb.Sheets[preferred];
+  if (!sheet) throw new Error('No encontré la hoja de horario gerencial');
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: false });
 
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
-  if (!rows.length) throw new Error('El archivo de gerencia está vacío');
-
-  // Detectar fila de encabezado
+  // Semanas: bloques L M M J V S D (el formato distrito repite 5 semanas)
   let headerIdx = -1;
-  let colMap = {}; // dayKey or 'name'/'role' -> col index
-  const dayAliases = {
-    lun: ['lun', 'lunes', 'l', 'mon', 'monday'],
-    mar: ['mar', 'martes', 'ma', 'tue', 'tuesday'],
-    mie: ['mie', 'mié', 'miercoles', 'miércoles', 'mi', 'wed', 'wednesday'],
-    jue: ['jue', 'jueves', 'j', 'thu', 'thursday'],
-    vie: ['vie', 'viernes', 'v', 'fri', 'friday'],
-    sab: ['sab', 'sáb', 'sabado', 'sábado', 's', 'sat', 'saturday'],
-    dom: ['dom', 'domingo', 'd', 'sun', 'sunday']
-  };
-
-  for (let r = 0; r < Math.min(rows.length, 15); r++) {
-    const row = rows[r];
-    if (!row) continue;
-    const lower = row.map(c => (c == null ? '' : String(c).trim().toLowerCase()));
-    const hasName = lower.some(c => c === 'nombre' || c === 'gerente' || c === 'name' || c === 'persona');
-    const hasDay = lower.some(c => dayAliases.lun.includes(c) || dayAliases.mar.includes(c));
-    if (hasName || hasDay) {
+  const weeks = [];
+  for (let r = 0; r < Math.min(rows.length, 30); r++) {
+    const row = rows[r] || [];
+    const letters = row.map(c => String(c == null ? '' : c).trim().toUpperCase());
+    const found = [];
+    for (let c = 0; c < letters.length - 6; c++) {
+      const slice = letters.slice(c, c + 7);
+      if (slice[0]==='L' && slice[1]==='M' && slice[3]==='J' && slice[4]==='V' && slice[5]==='S' && slice[6]==='D') {
+        found.push(c);
+        c += 6;
+      }
+    }
+    if (found.length >= 1 && found.length >= weeks.length) {
       headerIdx = r;
-      row.forEach((cell, ci) => {
-        const c = (cell == null ? '' : String(cell).trim().toLowerCase());
-        if (c === 'nombre' || c === 'gerente' || c === 'name' || c === 'persona') colMap.name = ci;
-        else if (c === 'rol' || c === 'cargo' || c === 'role') colMap.role = ci;
-        else {
-          for (const [key, aliases] of Object.entries(dayAliases)) {
-            if (aliases.includes(c)) { colMap[key] = ci; break; }
-          }
-        }
-      });
-      break;
+      weeks.length = 0;
+      found.forEach((col, i) => weeks.push({ index: i + 1, col }));
     }
   }
-
-  if (headerIdx < 0) {
-    // Fallback: asumir primera fila = nombres de columnas típicos o Nombre | Lun...Dom
-    headerIdx = 0;
-    const row0 = rows[0] || [];
-    if (row0.length >= 8) {
-      colMap.name = 0;
-      DAY_KEYS.forEach((k, i) => { colMap[k] = i + 1; });
-    } else {
-      throw new Error('No se detectó encabezado. Usa columnas: Nombre, Lun, Mar, Mié, Jue, Vie, Sáb, Dom');
-    }
+  if (!weeks.length) {
+    throw new Error('No reconocí el formato de distrito. Busco la fila L M M J V S D en la hoja Formato Gerencial.');
   }
-  if (colMap.name == null) colMap.name = 0;
 
+  const skipName = /estructura|reunion|reuni[oó]n|horario gerente|nombre gerente|cliente al centro/i;
   const managers = [];
-  const mgrWeek = {};
-  let idCounter = 1;
-
+  const byWeek = {};
+  weeks.forEach(w => byWeek[w.index] = {});
+  let idn = 1;
   for (let r = headerIdx + 1; r < rows.length; r++) {
-    const row = rows[r];
-    if (!row || row[colMap.name] == null || String(row[colMap.name]).trim() === '') continue;
-    const name = String(row[colMap.name]).trim();
-    const role = colMap.role != null && row[colMap.role] != null
-      ? String(row[colMap.role]).trim() : 'Gerencia';
-    const id = 'G' + idCounter++;
-    managers.push({ id, name, role });
-    mgrWeek[id] = {};
-    DAY_KEYS.forEach((dk, di) => {
-      const dayName = DAYS[di];
-      const col = colMap[dk];
-      const raw = col != null ? row[col] : null;
-      mgrWeek[id][dayName] = normalizeMgrCode(raw);
+    const row = rows[r] || [];
+    const name = String(row[1] == null ? '' : row[1]).trim();
+    if (!name || skipName.test(name) || name.length < 3) continue;
+    if (/^(off|libre|semana)$/i.test(name)) continue;
+    const id = 'G' + idn++;
+    managers.push({ id, name, role: 'Gerencia' });
+    weeks.forEach(w => {
+      byWeek[w.index][id] = {};
+      DAY_KEYS.forEach((dk, di) => {
+        const raw = row[w.col + di];
+        byWeek[w.index][id][DAYS[di]] = normalizeMgrCode(raw);
+      });
     });
+    if (managers.length >= 20) break;
   }
-
-  if (!managers.length) throw new Error('No se encontraron gerentes en el archivo. Revisa que haya una columna Nombre y filas con datos.');
+  if (!managers.length) throw new Error('Encontré las semanas, pero no los nombres de gerentes en la columna B.');
 
   state.managers = managers;
-  state.managerShifts = mgrWeek;
+  state.managerWeeks = byWeek;
+  state.managerWeek = state.managerWeek && byWeek[state.managerWeek] ? state.managerWeek : 1;
+  state.managerShifts = byWeek[state.managerWeek];
   state.managerScheduleLoaded = true;
-  state.managerSourceFile = fileName || 'archivo cargado';
-
+  state.managerSourceFile = (fileName || 'gerencia') + ' · ' + preferred;
+  renderWeekPicker();
   renderManagerGrid();
-
   const status = document.getElementById('mgrFileStatus');
   if (status) {
     status.classList.remove('hidden');
-    status.innerHTML = `<span class="text-emerald-700 font-medium">✓ ${managers.length} gerente(s) cargados</span> — revisa la cuadrícula y pulsa <strong>Aplicar y generar horario definitivo</strong>`;
+    status.innerHTML = `<span class="text-emerald-700 font-medium">✓ ${managers.length} gerentes · ${weeks.length} semanas</span> (${preferred})`;
   }
+}
+
+function renderWeekPicker() {
+  const box = document.getElementById('weekPicker');
+  if (!box) return;
+  const weeks = state.managerWeeks || {};
+  const keys = Object.keys(weeks).map(Number).sort((a,b)=>a-b);
+  if (!keys.length) { box.innerHTML = ''; return; }
+  box.innerHTML = keys.map(k => {
+    const on = k === (state.managerWeek || 1);
+    return `<button type="button" data-week="${k}" class="week-btn px-3 py-1 rounded text-xs font-semibold ${on ? 'bg-accent-600 text-white' : 'bg-slate-100 text-slate-700'}">Semana ${k}</button>`;
+  }).join('');
+  box.querySelectorAll('.week-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.managerWeek = Number(btn.dataset.week);
+      state.managerShifts = (state.managerWeeks || {})[state.managerWeek] || {};
+      renderWeekPicker();
+      renderManagerGrid();
+    });
+  });
 }
 
 function handleManagerFile(file) {
