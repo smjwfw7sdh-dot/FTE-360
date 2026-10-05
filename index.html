@@ -133,7 +133,6 @@
             <p class="text-sm text-slate-500 mt-0.5">Dotación ideal/día · Ciclos 5x2/4x3/3x4/2x5 · Cierre ×3 · Relevo por fortaleza · Horas semanales</p>
           </div>
           <div id="weekNavTop" class="flex flex-wrap items-center gap-2"></div>
-        </div>
           <div class="flex gap-2">
             <button id="btnRegenerate" class="px-4 py-2 bg-accent-600 text-white text-sm font-medium rounded-lg hover:bg-accent-700">Volver a generar</button>
             <button id="btnExport" class="px-4 py-2 border border-slate-300 text-slate-700 text-sm font-medium rounded-lg hover:bg-slate-50">Exportar Excel</button>
@@ -141,7 +140,7 @@
         </div>
         <div class="mt-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           <div class="bg-slate-50 rounded-lg p-3 text-center"><p class="text-xs text-slate-500">Turnos</p><p id="mShifts" class="text-xl font-semibold text-primary-800">—</p></div>
-          <div class="bg-slate-50 rounded-lg p-3 text-center"><p class="text-xs text-slate-500">Horas crew (meta ~560)</p><p id="mHours" class="text-xl font-semibold text-primary-800">—</p></div>
+          <div class="bg-slate-50 rounded-lg p-3 text-center"><p class="text-xs text-slate-500">Horas crew (560)</p><p id="mHours" class="text-xl font-semibold text-primary-800">—</p></div>
           <div class="bg-slate-50 rounded-lg p-3 text-center"><p class="text-xs text-slate-500">Personas con turno</p><p id="mPeople" class="text-xl font-semibold text-primary-800">—</p></div>
           <div class="bg-slate-50 rounded-lg p-3 text-center"><p class="text-xs text-slate-500">Crew</p><p id="mCrew" class="text-xl font-semibold text-primary-800">—</p></div>
           <div class="bg-slate-50 rounded-lg p-3 text-center"><p class="text-xs text-slate-500">Crew Master</p><p id="mMaster" class="text-xl font-semibold text-accent-600">—</p></div>
@@ -540,8 +539,9 @@ function generateSchedule() {
   DAYS.forEach(d => coverage[d] = baseSlots.map(() => 0));
   const remaining = {};
   const daysWorked = {}; // empId -> count of days already assigned
+  let hourBudget = 560; // tope duro de horas crew de la semana
   state.team.forEach(p => {
-    remaining[p.id] = p.weeklyHours;
+    remaining[p.id] = Number(p.weeklyHours) || 0;
     daysWorked[p.id] = 0;
   });
 
@@ -643,6 +643,7 @@ function generateSchedule() {
       const maxH = person.maxShift || MAX_SHIFT_H;
       if (hours < minH || hours > maxH) return false;
       if (hours > remaining[person.id] - person.assignedToday + 0.01) return false;
+      if (hours > hourBudget + 0.01) return false;
       if (!isInWindow(slots[startIdx].start, slots[endIdx].end, person.windows)) return false;
 
       for (let i = startIdx; i <= endIdx; i++) {
@@ -654,6 +655,7 @@ function generateSchedule() {
         });
       }
       remaining[person.id] -= hours;
+      hourBudget -= hours;
       person.assignedToday += hours;
       assignedTodayIds.add(person.id);
       daysWorked[person.id]++;
@@ -832,7 +834,7 @@ function generateSchedule() {
         person.minShift = 4;
         person.maxShift = 10;
         person.maxDays = 7;
-        if (remaining[person.id] < 4) remaining[person.id] = 4;
+        if ((remaining[person.id] || 0) < 4) continue;
         let best = null;
         for (const w of person.windows) {
           for (let s = 0; s < slots.length; s++) {
@@ -848,10 +850,12 @@ function generateSchedule() {
           placed = true;
           break;
         }
-        // Sin bloque compatible: igual se asigna el turno dentro de su disponibilidad.
+        const budget = Math.min(remaining[person.id] || 0, hourBudget);
+        if (budget < 4) continue;
         const w = (person.windows && person.windows[0]) || { start: '10:00', end: '18:00' };
-        const hours = 8;
-        remaining[person.id] = Math.max(remaining[person.id] || 0, hours);
+        const hours = Math.min(8, budget);
+        remaining[person.id] -= hours;
+        hourBudget -= hours;
         shifts.push({
           empId: person.id, name: person.name, role: person.role, strength: person.strength,
           day, start: w.start, end: w.end, hours, breakMin: colacionMin(person), type: 'OPERACIÓN',
@@ -865,6 +869,52 @@ function generateSchedule() {
       if (!placed) break;
     }
   });
+
+  // 560 h de crew, sin pasarse. Cada persona no supera su jornada del Excel.
+  function crewHours() {
+    return Math.round(shifts.filter(s => !s.isManager).reduce((n, s) => n + s.hours, 0) * 10) / 10;
+  }
+  function personHours(id) {
+    return shifts.filter(s => s.empId === id && !s.isManager).reduce((n, s) => n + s.hours, 0);
+  }
+  function personCap(id) {
+    const p = state.team.find(x => x.id === id);
+    return p && p.weeklyHours ? p.weeklyHours : 42;
+  }
+  function shiftEndFrom(start, hours) {
+    const [h, m] = start.split(':').map(Number);
+    const total = h * 60 + m + Math.round(hours * 60);
+    const hh = Math.floor(total / 60) % 24;
+    const mm = total % 60;
+    return String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
+  }
+  let guard = 0;
+  while (crewHours() > 560 && guard < 900) {
+    guard++;
+    const pool = shifts.filter(s => !s.isManager && s.hours > 4);
+    if (!pool.length) break;
+    pool.sort((a, b) => {
+      const overA = personHours(a.empId) - personCap(a.empId);
+      const overB = personHours(b.empId) - personCap(b.empId);
+      return overB - overA || (a.isCloser - b.isCloser) || (b.hours - a.hours);
+    });
+    const s = pool[0];
+    s.hours = Math.round((s.hours - 0.5) * 10) / 10;
+    s.end = shiftEndFrom(s.start, s.hours);
+  }
+  guard = 0;
+  while (crewHours() < 560 && guard < 900) {
+    guard++;
+    const pool = shifts.filter(s => !s.isManager && s.hours < 9 && personHours(s.empId) + 0.5 <= personCap(s.empId) + 0.01);
+    if (!pool.length) break;
+    pool.sort((a, b) => (personCap(a.empId) - personHours(a.empId)) - (personCap(b.empId) - personHours(b.empId)) || a.hours - b.hours);
+    const s = pool[0];
+    const room = Math.min(0.5, 560 - crewHours(), 9 - s.hours, personCap(s.empId) - personHours(s.empId));
+    if (room < 0.5 && room < 560 - crewHours()) break;
+    if (room <= 0) break;
+    s.hours = Math.round((s.hours + room) * 10) / 10;
+    s.end = shiftEndFrom(s.start, s.hours);
+  }
 
   // Display slots (average) for coverage tab
   const slots = baseSlots.map(d => {
@@ -1090,8 +1140,7 @@ function renderSchedule() {
       : 'Todos dentro de ciclo y jornada (±2 h).';
     box.innerHTML = `
       <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
-        <p><strong>Meta semanal crew:</strong> ${g.metrics.totalHours} h de 560 h contratadas/objetivo
-          <span class="text-slate-500">(contratadas en equipo: ${g.metrics.contractedHours} h)</span></p>
+        <p><strong>Horas crew:</strong> ${g.metrics.totalHours} h de 560 h. La gerencia no suma en este total.</p>
         <p class="mt-1"><strong>Ciclo:</strong> ${g.metrics.cycleOk}/${g.metrics.compliance.length} con días exactos
           · <strong>Jornada:</strong> ${g.metrics.hoursOk}/${g.metrics.compliance.length} dentro de ±2 h</p>
         <p class="mt-1"><strong>Dotación crew (sin gerencia):</strong> ${daysLine}</p>
