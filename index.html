@@ -132,6 +132,8 @@
             <h2 class="text-lg font-semibold text-primary-800">Horario óptimo generado</h2>
             <p class="text-sm text-slate-500 mt-0.5">Dotación ideal/día · Ciclos 5x2/4x3/3x4/2x5 · Cierre ×3 · Relevo por fortaleza · Horas semanales</p>
           </div>
+          <div id="weekNavTop" class="flex flex-wrap items-center gap-2"></div>
+        </div>
           <div class="flex gap-2">
             <button id="btnRegenerate" class="px-4 py-2 bg-accent-600 text-white text-sm font-medium rounded-lg hover:bg-accent-700">Volver a generar</button>
             <button id="btnExport" class="px-4 py-2 border border-slate-300 text-slate-700 text-sm font-medium rounded-lg hover:bg-slate-50">Exportar Excel</button>
@@ -974,7 +976,7 @@ function generateSchedule() {
     });
   }
 
-  state.managerShifts = mgrWeek;
+  state.managerShifts = JSON.parse(JSON.stringify(mgrWeek));
   state.mgrFills = mgrFills;
 
   const totalHoursCrew = shifts.filter(s => !s.isManager).reduce((s, sh) => s + sh.hours, 0);
@@ -1218,7 +1220,7 @@ function renderManagerGrid() {
   const applyBtn = document.getElementById('btnApplyMgr');
   if (srcLabel) {
     srcLabel.textContent = state.managerScheduleLoaded
-      ? `Fuente: archivo cargado${state.managerSourceFile ? ' · ' + state.managerSourceFile : ''}`
+      ? `Semana ${state.managerWeek || 1} · ${state.managerSourceFile || 'archivo cargado'}`
       : 'Fuente: relleno automático';
   }
   if (badge) {
@@ -1286,16 +1288,21 @@ function processManagerWorkbook(wb, fileName) {
     throw new Error('No reconocí el formato de distrito. Busco la fila L M M J V S D en la hoja Formato Gerencial.');
   }
 
-  const skipName = /estructura|reunion|reuni[oó]n|horario gerente|nombre gerente|cliente al centro/i;
+  const skipName = /estructura|reunion|reuni[oó]n|horario gerente|nombre gerente|cliente al centro|total|horas|leyenda|apertura de/i;
   const managers = [];
   const byWeek = {};
+  const seen = new Set();
   weeks.forEach(w => byWeek[w.index] = {});
   let idn = 1;
   for (let r = headerIdx + 1; r < rows.length; r++) {
     const row = rows[r] || [];
     const name = String(row[1] == null ? '' : row[1]).trim();
     if (!name || skipName.test(name) || name.length < 3) continue;
-    if (/^(off|libre|semana)$/i.test(name)) continue;
+    if (/^(off|libre|semana|l|a|m|c|t)$/i.test(name)) continue;
+    if (/^\d/.test(name)) continue;
+    const key = name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    if (seen.has(key)) break;
+    seen.add(key);
     const id = 'G' + idn++;
     managers.push({ id, name, role: 'Gerencia' });
     weeks.forEach(w => {
@@ -1305,14 +1312,14 @@ function processManagerWorkbook(wb, fileName) {
         byWeek[w.index][id][DAYS[di]] = normalizeMgrCode(raw);
       });
     });
-    if (managers.length >= 20) break;
+    if (managers.length >= 4) break;
   }
   if (!managers.length) throw new Error('Encontré las semanas, pero no los nombres de gerentes en la columna B.');
 
   state.managers = managers;
   state.managerWeeks = byWeek;
   state.managerWeek = state.managerWeek && byWeek[state.managerWeek] ? state.managerWeek : 1;
-  state.managerShifts = byWeek[state.managerWeek];
+  state.managerShifts = JSON.parse(JSON.stringify(byWeek[state.managerWeek]));
   state.managerScheduleLoaded = true;
   state.managerSourceFile = (fileName || 'gerencia') + ' · ' + preferred;
   renderWeekPicker();
@@ -1328,16 +1335,16 @@ function renderWeekPicker() {
   const weeks = state.managerWeeks || {};
   const keys = Object.keys(weeks).map(Number).sort((a, b) => a - b);
   const current = state.managerWeek || keys[0] || 1;
-  const boxes = ['weekPicker', 'weekNavMain', 'weekNavTab'].map(id => document.getElementById(id)).filter(Boolean);
+  const boxes = ['weekPicker', 'weekNavMain', 'weekNavTab', 'weekNavTop'].map(id => document.getElementById(id)).filter(Boolean);
   boxes.forEach(box => {
-    if (!keys.length) { box.innerHTML = ''; return; }
+    if (!keys.length) { box.innerHTML = '<span class="text-xs text-slate-400">Sin semanas cargadas</span>'; return; }
     const atStart = current <= keys[0];
     const atEnd = current >= keys[keys.length - 1];
     box.innerHTML = `
-      <button type="button" data-move="-1" class="px-3 py-1 rounded text-xs font-semibold bg-slate-200 text-slate-800 disabled:opacity-40" ${atStart ? 'disabled' : ''}>← Anterior</button>
+      <button type="button" data-move="-1" class="px-3 py-1.5 rounded text-xs font-semibold bg-slate-200 text-slate-800 disabled:opacity-40" ${atStart ? 'disabled' : ''}>← Anterior</button>
       <span class="text-xs font-semibold text-primary-800">Semana ${current} de ${keys.length}</span>
-      <button type="button" data-move="1" class="px-3 py-1 rounded text-xs font-semibold bg-accent-600 text-white disabled:opacity-40" ${atEnd ? 'disabled' : ''}>Siguiente →</button>
-      ${keys.map(k => `<button type="button" data-week="${k}" class="px-2 py-1 rounded text-xs font-semibold ${k === current ? 'bg-primary-800 text-white' : 'bg-slate-100 text-slate-700'}">${k}</button>`).join('')}`;
+      <button type="button" data-move="1" class="px-3 py-1.5 rounded text-xs font-semibold bg-accent-600 text-white disabled:opacity-40" ${atEnd ? 'disabled' : ''}>Siguiente →</button>
+      ${keys.map(k => `<button type="button" data-week="${k}" class="px-2 py-1.5 rounded text-xs font-semibold ${k === current ? 'bg-primary-800 text-white' : 'bg-slate-100 text-slate-700'}">${k}</button>`).join('')}`;
     box.querySelectorAll('button').forEach(btn => {
       btn.addEventListener('click', () => {
         let next = current;
@@ -1345,10 +1352,10 @@ function renderWeekPicker() {
         if (btn.dataset.week) next = Number(btn.dataset.week);
         if (!weeks[next]) return;
         state.managerWeek = next;
-        state.managerShifts = weeks[next];
+        state.managerShifts = JSON.parse(JSON.stringify(weeks[next]));
         renderWeekPicker();
         renderManagerGrid();
-        if (state.team && state.team.length && state.generated) generateSchedule();
+        if (state.team && state.team.length) generateSchedule();
       });
     });
   });
