@@ -154,7 +154,7 @@
       <div class="mt-8 bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div class="px-4 py-3 bg-slate-50 border-b border-slate-100">
           <h3 class="font-semibold text-primary-800">Cuadrícula crew (sin gerencia)</h3>
-          <p class="text-xs text-slate-500 mt-0.5">Solo crew y crew master. Prioridad: 2 aperturas + 3 cierres cada día. <strong>Clic en un turno</strong> para moverlo a otro día.</p>
+          <p class="text-xs text-slate-500 mt-0.5">Prioridad fija: 2 aperturas (08:00) + 3 cierres. Dotación ideal todos los días. <strong>Clic en un turno</strong> para moverlo o cambiar horario (ideal para reforzar domingo).</p>
         </div>
         <div class="scroll-x">
           <table class="w-full text-sm">
@@ -854,6 +854,13 @@ function generateSchedule() {
     const closerIds = new Set();
 
     function pickOpener(relaxed) {
+      // Buscar índice del slot que empieza ~08:00
+      let slot0800 = slots.findIndex(s => {
+        const m = timeToMin(s.start);
+        return m >= 7*60 + 30 && m <= 8*60 + 30;
+      });
+      if (slot0800 < 0) slot0800 = openSlotIdxs[0] != null ? openSlotIdxs[0] : 0;
+
       const canOpen = shuffle(candidates.filter(p => {
         if (assignedTodayIds.has(p.id) || daysWorked[p.id] >= p.maxDays) return false;
         if (remaining[p.id] < 4) return false;
@@ -862,7 +869,7 @@ function generateSchedule() {
             if (slots[i] && isInWindow(slots[i].start, slots[i].end, [w])) return true;
           }
         }
-        return false;
+        return relaxed; // en modo relajado permitir aunque no cruce open slots exactos
       }));
       for (const person of canOpen) {
         if (openerIds.size >= MIN_OPENERS) break;
@@ -875,15 +882,20 @@ function generateSchedule() {
               const maxH = person.maxShift || MAX_SHIFT_H;
               if (hours < minH || hours > maxH) continue;
               if (hours > remaining[person.id]) continue;
-              if (!isInWindow(slots[s].start, slots[e].end, [w])) continue;
+              if (!relaxed && !isInWindow(slots[s].start, slots[e].end, [w])) continue;
+              if (relaxed && !isInWindow(slots[s].start, slots[e].end, [w])) continue;
               let coversOpen = 0;
               for (let i = s; i <= e; i++) if (openSlotIdxs.includes(i)) coversOpen++;
-              // Debe cubrir al menos 2 franjas de apertura (1h)
-              if (coversOpen < 2) continue;
-              // Preferir turnos de apertura (temprano), no de cierre
+              if (coversOpen < 2 && !relaxed) continue;
+              if (coversOpen < 1 && relaxed) continue;
               let coversClose = 0;
               for (let i = s; i <= e; i++) if (closeSlotIdxs.includes(i)) coversClose++;
-              const score = coversOpen * 40 - coversClose * 15 + (relaxed ? 0 : (10 - Math.abs(hours - (person.targetShift || 6))));
+              // Bonus fuerte si empieza en/cerca de 08:00
+              let startBonus = 0;
+              const sm = timeToMin(slots[s].start);
+              if (sm >= 7*60+30 && sm <= 8*60+30) startBonus = 50;
+              else if (sm <= 9*60) startBonus = 25;
+              const score = coversOpen * 40 - coversClose * 20 + startBonus + (10 - Math.abs(hours - (person.targetShift || 6)));
               if (!best || score > best.score) best = { s, e, score };
             }
           }
@@ -895,6 +907,9 @@ function generateSchedule() {
             if (last && last.empId === person.id && last.day === day) {
               last.type = 'APERTURA';
               last.isOpener = true;
+              // Forzar inicio visual 08:00 si el slot arranca cerca
+              const sm = timeToMin(last.start);
+              if (sm >= 7*60 && sm <= 9*60) last.start = '08:00';
             }
           }
         }
@@ -1016,14 +1031,18 @@ function generateSchedule() {
       if (assignedTodayIds.size >= idealN) break;
     }
 
-    // PHASE 2: la dotación de crew es obligatoria. Si falta gente, se asigna igual.
+    // PHASE 2: la dotación ideal es obligatoria. Si falta gente, se fuerza.
     let force = 0;
-    while (assignedTodayIds.size < idealN && force < 40) {
+    while (assignedTodayIds.size < idealN && force < 80) {
       force++;
       const pool = shuffle(state.team.filter(p => {
         if (assignedTodayIds.has(p.id)) return false;
         const av = state.availability[p.id];
-        return av && av[dayKey];
+        // permitir si tiene ventana o COMPLETA; bloquear solo LIBRE explícito (null)
+        if (!av) return force > 40; // sin datos: solo en pase muy relajado
+        if (av[dayKey] === null) return false; // LIBRE
+        if (av[dayKey] && av[dayKey].length) return true;
+        return force > 20;
       }));
       let placed = false;
       for (const raw of pool) {
@@ -1075,6 +1094,210 @@ function generateSchedule() {
       if (!placed) break;
     }
   });
+
+  // ============================================================
+  // GARANTÍA DE DOTACIÓN IDEAL (sí o sí)
+  // 1) Rebalancear entre días sobrantes/faltantes
+  // 2) Forzar asignación hasta alcanzar ideal en cada día
+  //    sin tocar el mínimo de 2 aperturas y 3 cierres
+  // ============================================================
+  (function guaranteeIdealHeadcount() {
+    const IDEAL_HC = {
+      'Lunes': 10, 'Martes': 9, 'Miércoles': 9,
+      'Jueves': 12, 'Viernes': 12, 'Sábado': 11, 'Domingo': 10
+    };
+
+    function headcount(day) {
+      return new Set(shifts.filter(s => !s.isManager && s.day === day).map(s => s.empId)).size;
+    }
+    function openCount(day) {
+      return shifts.filter(s => !s.isManager && s.day === day && (s.isOpener || s.type === 'APERTURA')).length;
+    }
+    function closeCount(day) {
+      return shifts.filter(s => !s.isManager && s.day === day && (s.isCloser || s.type === 'CIERRE')).length;
+    }
+    function personDays(id) {
+      return shifts.filter(s => !s.isManager && s.empId === id).length;
+    }
+    function personHrs(id) {
+      return shifts.filter(s => !s.isManager && s.empId === id).reduce((n, s) => n + (s.hours || 0), 0);
+    }
+    function defaultShiftFor(day, person) {
+      // turno genérico de operación 6h en horario medio
+      const dayHours = (state.hours || []).find(h => h.day === day);
+      let start = '10:00', end = '16:00';
+      if (dayHours && dayHours.openPublic) {
+        // medio día
+        start = '11:00';
+        end = '17:00';
+      }
+      const av = state.availability[person.id];
+      const dayKey = DAY_KEYS[DAYS.indexOf(day)];
+      const windows = av && av[dayKey];
+      if (windows && windows.length && windows[0].start) {
+        start = windows[0].start;
+        const sm = timeToMin(start);
+        const targetH = Math.min(8, Math.max(4, (person.weeklyHours || 30) / Math.max(1, (person.workDays || 4))));
+        const total = sm + Math.round(targetH * 60);
+        end = String(Math.floor(total / 60) % 24).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
+        if (windows[0].end) {
+          // no pasar el fin de ventana
+          let we = timeToMin(windows[0].end);
+          if (we <= timeToMin(windows[0].start)) we += 1440;
+          if (total > we) {
+            end = windows[0].end;
+          }
+        }
+      }
+      let sm = timeToMin(start), em = timeToMin(end);
+      if (em <= sm) em += 1440;
+      let hours = Math.round(((em - sm) / 60) * 10) / 10;
+      const col = colacionMin(person);
+      if (col) hours = Math.max(4, Math.round((hours - col / 60) * 10) / 10);
+      return { start, end, hours, breakMin: col };
+    }
+
+    // --- Paso A: rebalancear de días con exceso a días con falta ---
+    let passes = 0;
+    while (passes < 120) {
+      passes++;
+      const under = DAYS.filter(d => headcount(d) < (IDEAL_HC[d] || 10))
+        .sort((a, b) => (IDEAL_HC[a] - headcount(a)) - (IDEAL_HC[b] - headcount(b))).reverse();
+      const over = DAYS.filter(d => headcount(d) > (IDEAL_HC[d] || 10));
+      if (!under.length) break;
+      if (!over.length) break;
+
+      let moved = false;
+      for (const toDay of under) {
+        if (headcount(toDay) >= (IDEAL_HC[toDay] || 10)) continue;
+        const toKey = DAY_KEYS[DAYS.indexOf(toDay)];
+        for (const fromDay of over) {
+          if (headcount(fromDay) <= (IDEAL_HC[fromDay] || 10)) continue;
+          const movable = shifts.filter(s => {
+            if (s.isManager || s.day !== fromDay) return false;
+            if ((s.isOpener || s.type === 'APERTURA') && openCount(fromDay) <= MIN_OPENERS) return false;
+            if ((s.isCloser || s.type === 'CIERRE') && closeCount(fromDay) <= MIN_CLOSERS) return false;
+            if (shifts.some(x => !x.isManager && x.empId === s.empId && x.day === toDay)) return false;
+            const av = state.availability[s.empId];
+            if (av && av[toKey] === null) return false; // LIBRE explícito
+            return true;
+          });
+          if (!movable.length) continue;
+          const s = movable[Math.floor(Math.random() * movable.length)];
+          const av = state.availability[s.empId];
+          const windows = av && av[toKey];
+          if (windows && windows.length && !isInWindow(s.start, s.end, windows)) {
+            const w = windows[0];
+            s.start = w.start || s.start;
+            const dur = s.hours || 6;
+            const [h, m] = (s.start || '10:00').split(':').map(Number);
+            const total = h * 60 + m + Math.round(dur * 60);
+            s.end = String(Math.floor(total / 60) % 24).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
+          }
+          s.day = toDay;
+          if (!(s.isCloser || s.type === 'CIERRE') && !(s.isOpener || s.type === 'APERTURA')) s.type = 'OPERACIÓN';
+          moved = true;
+          break;
+        }
+        if (moved) break;
+      }
+      if (!moved) break;
+    }
+
+    // --- Paso B: FORZAR dotación ideal — asignar gente faltante sí o sí ---
+    DAYS.forEach(day => {
+      const ideal = IDEAL_HC[day] || 10;
+      const dayKey = DAY_KEYS[DAYS.indexOf(day)];
+      let guard = 0;
+      while (headcount(day) < ideal && guard < 50) {
+        guard++;
+        // Candidatos: no trabajan ese día, no están LIBRE
+        const pool = state.team.filter(p => {
+          if (shifts.some(s => !s.isManager && s.empId === p.id && s.day === day)) return false;
+          const av = state.availability[p.id];
+          if (av && av[dayKey] === null) return false; // LIBRE obligatorio
+          return true;
+        });
+        if (!pool.length) break;
+
+        // Preferir quien tenga menos días trabajados y más horas restantes
+        pool.sort((a, b) => {
+          const da = personDays(a.id) - personDays(b.id);
+          if (da !== 0) return da;
+          const ha = (a.weeklyHours || 30) - personHrs(a.id);
+          const hb = (b.weeklyHours || 30) - personHrs(b.id);
+          return hb - ha;
+        });
+
+        const person = pool[0];
+        const t = defaultShiftFor(day, person);
+        // Ajustar tipo según necesidad de apertura/cierre
+        let type = 'OPERACIÓN';
+        let isOpener = false, isCloser = false;
+        if (openCount(day) < MIN_OPENERS) {
+          type = 'APERTURA';
+          isOpener = true;
+          t.start = '08:00';
+          const dur = Math.max(6, t.hours || 6);
+          const total = 8 * 60 + Math.round(dur * 60);
+          t.end = String(Math.floor(total / 60) % 24).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
+          t.hours = dur;
+        } else if (closeCount(day) < MIN_CLOSERS) {
+          type = 'CIERRE';
+          isCloser = true;
+          t.start = '18:30';
+          t.end = '03:30';
+          t.hours = 9;
+        }
+
+        shifts.push({
+          empId: person.id,
+          name: person.name,
+          role: person.role,
+          strength: person.strength,
+          day,
+          start: t.start,
+          end: t.end,
+          hours: t.hours,
+          breakMin: t.breakMin || 30,
+          type,
+          isMaster: (person.role || '').toLowerCase().includes('master'),
+          isCloser,
+          isOpener,
+          forced: true
+        });
+      }
+    });
+
+    // --- Paso C: asegurar mínimos apertura/cierre reclasificando si hace falta ---
+    DAYS.forEach(day => {
+      let opens = openCount(day);
+      let closes = closeCount(day);
+      if (opens < MIN_OPENERS) {
+        const early = shifts
+          .filter(s => !s.isManager && s.day === day && !(s.isCloser || s.type === 'CIERRE'))
+          .sort((a, b) => timeToMin(a.start) - timeToMin(b.start));
+        for (const s of early) {
+          if (opens >= MIN_OPENERS) break;
+          s.type = 'APERTURA';
+          s.isOpener = true;
+          s.start = '08:00';
+          opens++;
+        }
+      }
+      if (closes < MIN_CLOSERS) {
+        const late = shifts
+          .filter(s => !s.isManager && s.day === day && !(s.isOpener || s.type === 'APERTURA'))
+          .sort((a, b) => timeToMin(b.start) - timeToMin(a.start));
+        for (const s of late) {
+          if (closes >= MIN_CLOSERS) break;
+          s.type = 'CIERRE';
+          s.isCloser = true;
+          closes++;
+        }
+      }
+    });
+  })();
 
   // 560 h de crew, sin pasarse. Cada persona no supera su jornada del Excel.
   function crewHours() {
@@ -1350,7 +1573,7 @@ function renderSchedule() {
         <p class="mt-1"><strong>Ciclo:</strong> ${g.metrics.cycleOk}/${g.metrics.compliance.length} con días exactos
           · <strong>Jornada:</strong> ${g.metrics.hoursOk}/${g.metrics.compliance.length} dentro de ±2 h</p>
         <p class="mt-1"><strong>Dotación crew (sin gerencia):</strong> ${daysLine}</p>
-        <p class="mt-1 text-xs text-slate-500">La gerencia del Excel se suma encima y no reemplaza el cupo de crew. Los 3 de cierre sí cuentan dentro del crew.</p>
+        <p class="mt-1 text-xs text-slate-500">Dotación ideal es obligatoria en todos los días (se fuerza si falta gente). Mínimo fijo: 2 aperturas 08:00 + 3 cierres. La gerencia va aparte.</p>
         <p class="mt-1 text-xs">${badTxt}</p>
       </div>`;
   }
@@ -1450,24 +1673,31 @@ function openMoveShiftModal(empId, fromDay) {
 
   const person = state.team.find(p => String(p.id) === String(empId));
   const name = shift.name || (person && person.name) || empId;
+  const IDEAL = { Lunes:10, Martes:9, 'Miércoles':9, Jueves:12, Viernes:12, 'Sábado':11, Domingo:10 };
 
-  // Días destino posibles: sin turno ese día + con disponibilidad
+  function dayCount(day) {
+    return new Set(g.shifts.filter(s => !s.isManager && s.day === day).map(s => s.empId)).size;
+  }
+
   const occupied = new Set(g.shifts.filter(s => !s.isManager && String(s.empId) === String(empId)).map(s => s.day));
+
   const options = DAYS.filter(d => d !== fromDay).map(d => {
     const hasShift = occupied.has(d);
     const av = state.availability[empId] || state.availability[Number(empId)];
     const dayKey = DAY_KEYS[DAYS.indexOf(d)];
-    const windows = av && av[dayKey];
-    let okAvail = false;
-    if (windows && windows.length) {
-      okAvail = isInWindow(shift.start, shift.end, windows);
-    }
-    const disabled = hasShift || !windows;
+    const windows = av ? av[dayKey] : undefined;
+    const libre = windows === null; // explícitamente LIBRE en Excel
+    const got = dayCount(d);
+    const ideal = IDEAL[d] || 10;
+    const gap = ideal - got;
     let reason = '';
-    if (hasShift) reason = 'ya tiene turno';
-    else if (!windows) reason = 'sin disponibilidad';
-    else if (!okAvail) reason = 'fuera de ventana (se permite igual)';
-    return { day: d, disabled: hasShift || !windows, reason, soft: !okAvail && !!windows };
+    if (hasShift) reason = 'ya tiene turno aquí';
+    else if (libre) reason = 'marcado LIBRE en disponibilidad';
+    else if (!windows) reason = 'sin ventana (puedes mover igual)';
+    else if (!isInWindow(shift.start, shift.end, windows)) reason = 'fuera de ventana (puedes mover igual)';
+    // Solo bloquear si YA tiene turno ese día. El resto es a conveniencia del usuario.
+    const disabled = hasShift;
+    return { day: d, disabled, reason, gap, got, ideal, soft: !hasShift && (libre || !windows) };
   });
 
   const existing = document.getElementById('moveShiftModal');
@@ -1477,59 +1707,128 @@ function openMoveShiftModal(empId, fromDay) {
   modal.id = 'moveShiftModal';
   modal.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4';
   modal.innerHTML = `
-    <div class="bg-white rounded-xl shadow-xl max-w-md w-full p-5">
-      <h3 class="text-lg font-semibold text-primary-800 mb-1">Mover turno</h3>
-      <p class="text-sm text-slate-600 mb-4"><strong>${name}</strong> · ${fromDay} · ${shift.start}–${shift.end} (${shift.hours}h)</p>
-      <p class="text-xs text-slate-500 mb-2">Elige el día destino. Se mantiene el mismo horario de inicio/fin.</p>
-      <div class="space-y-2 max-h-64 overflow-y-auto mb-4" id="moveDayOptions">
-        ${options.map(o => `
-          <button type="button" data-to="${o.day}" ${o.disabled ? 'disabled' : ''}
+    <div class="bg-white rounded-xl shadow-xl max-w-lg w-full p-5 max-h-[90vh] overflow-y-auto">
+      <h3 class="text-lg font-semibold text-primary-800 mb-1">Mover / ajustar turno</h3>
+      <p class="text-sm text-slate-600 mb-3"><strong>${name}</strong> · ${fromDay}</p>
+
+      <div class="grid grid-cols-2 gap-3 mb-4">
+        <div>
+          <label class="text-xs text-slate-500">Inicio</label>
+          <input type="time" id="moveStart" value="${shift.start}" class="w-full border rounded-lg px-2 py-1.5 text-sm" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-500">Fin</label>
+          <input type="time" id="moveEnd" value="${(shift.end || '').substring(0,5)}" class="w-full border rounded-lg px-2 py-1.5 text-sm" />
+        </div>
+      </div>
+
+      <p class="text-xs text-slate-500 mb-2">Elige día destino. Puedes mover a cualquier día libre de esta persona (incluso si la disponibilidad no calza). Útil para reforzar domingo u otros días flojos.</p>
+      <div class="space-y-2 mb-4" id="moveDayOptions">
+        ${options.map(o => {
+          const gapTxt = o.gap > 0 ? `<span class="text-red-600 text-xs ml-1">falta ${o.gap}</span>` :
+                         o.gap < 0 ? `<span class="text-amber-600 text-xs ml-1">+${-o.gap} extra</span>` :
+                         `<span class="text-emerald-600 text-xs ml-1">ideal</span>`;
+          return `<button type="button" data-to="${o.day}" ${o.disabled ? 'disabled' : ''}
             class="w-full text-left px-3 py-2 rounded-lg border text-sm ${o.disabled ? 'opacity-40 cursor-not-allowed bg-slate-50' : 'hover:border-accent-500 hover:bg-blue-50 border-slate-200'}">
             <span class="font-medium">${o.day}</span>
-            ${o.reason ? `<span class="text-xs text-slate-500 ml-2">(${o.reason})</span>` : ''}
-            ${o.soft && !o.disabled ? '<span class="text-xs text-amber-600 ml-1">⚠ fuera de ventana</span>' : ''}
-          </button>`).join('')}
+            <span class="text-xs text-slate-500 ml-2">${o.got}/${o.ideal} crew</span>
+            ${gapTxt}
+            ${o.reason ? `<div class="text-[11px] text-slate-400 mt-0.5">${o.reason}</div>` : ''}
+          </button>`;
+        }).join('')}
       </div>
-      <div class="flex justify-end gap-2">
+
+      <div class="flex flex-wrap justify-between gap-2">
+        <button type="button" id="moveOnlyTimes" class="px-3 py-2 text-sm rounded-lg bg-slate-700 text-white">Solo cambiar horario (mismo día)</button>
         <button type="button" id="moveCancel" class="px-4 py-2 text-sm rounded-lg bg-slate-100 text-slate-700">Cancelar</button>
       </div>
     </div>`;
   document.body.appendChild(modal);
 
+  const getTimes = () => {
+    let start = document.getElementById('moveStart').value || shift.start;
+    let end = document.getElementById('moveEnd').value || shift.end;
+    if (start.length === 5) start = start;
+    if (end.length === 5) end = end;
+    return { start, end };
+  };
+
   modal.querySelector('#moveCancel').onclick = () => modal.remove();
   modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+
+  modal.querySelector('#moveOnlyTimes').onclick = () => {
+    const { start, end } = getTimes();
+    applyShiftEdit(empId, fromDay, fromDay, start, end);
+    modal.remove();
+  };
+
   modal.querySelectorAll('[data-to]').forEach(btn => {
     if (btn.disabled) return;
     btn.addEventListener('click', () => {
-      moveShift(empId, fromDay, btn.dataset.to);
+      const { start, end } = getTimes();
+      applyShiftEdit(empId, fromDay, btn.dataset.to, start, end);
       modal.remove();
     });
   });
 }
 
-function moveShift(empId, fromDay, toDay) {
+function applyShiftEdit(empId, fromDay, toDay, start, end) {
   const g = state.generated;
-  if (!g || fromDay === toDay) return;
-
+  if (!g) return;
   const idx = g.shifts.findIndex(s => !s.isManager && String(s.empId) === String(empId) && s.day === fromDay);
   if (idx < 0) return;
 
-  // No permitir si ya tiene turno en destino
-  if (g.shifts.some(s => !s.isManager && String(s.empId) === String(empId) && s.day === toDay)) {
-    alert('Esta persona ya tiene turno el ' + toDay);
-    return;
+  if (fromDay !== toDay) {
+    if (g.shifts.some(s => !s.isManager && String(s.empId) === String(empId) && s.day === toDay)) {
+      alert('Esta persona ya tiene turno el ' + toDay);
+      return;
+    }
   }
 
   const shift = g.shifts[idx];
-  const oldDay = shift.day;
   shift.day = toDay;
+  if (start) shift.start = start.substring(0, 5);
+  if (end) shift.end = end.substring(0, 5);
 
-  // Recalcular cobertura de forma simple
+  // Recalcular horas
+  let sm = timeToMin(shift.start);
+  let em = timeToMin(shift.end);
+  if (em <= sm) em += 1440;
+  let hours = (em - sm) / 60;
+  if (shift.breakMin) hours = Math.max(0, hours - shift.breakMin / 60);
+  shift.hours = Math.round(hours * 10) / 10;
+
+  // Reclasificar tipo según horario
+  const startM = timeToMin(shift.start);
+  if (startM <= 9 * 60) {
+    shift.type = 'APERTURA';
+    shift.isOpener = true;
+    shift.isCloser = false;
+  } else if (startM >= 16 * 60 || (timeToMin(shift.end) > 0 && timeToMin(shift.end) <= 6 * 60)) {
+    shift.type = 'CIERRE';
+    shift.isCloser = true;
+    shift.isOpener = false;
+  } else {
+    shift.type = 'OPERACIÓN';
+    shift.isOpener = false;
+    shift.isCloser = false;
+  }
+
+  // Actualizar métricas de headcount
+  if (g.metrics && g.metrics.dayHeadcount) {
+    DAYS.forEach(d => {
+      g.metrics.dayHeadcount[d] = new Set(g.shifts.filter(s => !s.isManager && s.day === d).map(s => s.empId)).size;
+    });
+  }
+
   rebuildCoverageFromShifts();
   renderSchedule();
   renderWeekGrid();
   renderCoverage();
-  if (typeof renderMetrics === 'function') try { renderMetrics(); } catch (_) {}
+}
+
+function moveShift(empId, fromDay, toDay) {
+  applyShiftEdit(empId, fromDay, toDay, null, null);
 }
 
 function rebuildCoverageFromShifts() {
@@ -1548,16 +1847,16 @@ function rebuildCoverageFromShifts() {
       let ss = timeToMin(slot.start);
       let se = timeToMin(slot.end);
       if (se <= ss) se += 1440;
-      // overlap
       let a = startM, b = endM;
-      if (ss < 8*60 && startM >= 12*60) { /* overnight shift vs morning slot */ }
+      // normalizar franjas nocturnas
+      if (ss < 6 * 60) ss += 1440;
+      if (se < 6 * 60) se += 1440;
+      if (a < 6 * 60 && b > 12 * 60) { /* ok */ }
       if (ss >= a && ss < b) g.coverage[s.day][i]++;
       else if (a >= ss && a < se) g.coverage[s.day][i]++;
     });
   });
 }
-
-
 
 function renderManagerGrid() {
   const bodies = [document.getElementById('mgrGridBody'), document.getElementById('mgrGridBodyMain')].filter(Boolean);
@@ -2019,7 +2318,7 @@ function exportExcel() {
     ...DAYS.map(d => {
       const ds = crewShifts.filter(s => s.day === d);
       return [d, countOpen[d], minO, countClose[d], minC, ds.length];
-    })
+    ])
   ]), 'Resumen');
 
   const suffix = state.managerScheduleLoaded ? 'Definitivo' : 'Optimo';
