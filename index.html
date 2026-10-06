@@ -83,7 +83,7 @@
         </div>
         <svg class="mx-auto h-12 w-12 text-slate-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
         <h3 class="text-base font-medium text-slate-700 mb-1">2. Horario gerencial</h3>
-        <p class="text-slate-500 text-xs mb-3">Formato distrito: hoja «Formato Gerencial», semanas L M M J V S D, códigos A / AC / R / RC / C / CC / T / TC / L</p>
+        <p class="text-slate-500 text-xs mb-3">Hoja HORARIO · semanas L M M J V S D · códigos A / M / R / RG / RA / C / T / CM / L</p>
         <input type="file" id="mgrFileInputInit" accept=".xlsx,.xls" class="hidden" />
         <button type="button" onclick="document.getElementById('mgrFileInputInit').click()" class="inline-flex items-center px-4 py-2 bg-slate-700 text-white text-sm font-medium rounded-lg hover:bg-slate-800">Seleccionar gerencia</button>
       </div>
@@ -130,7 +130,7 @@
         <div class="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h2 class="text-lg font-semibold text-primary-800">Horario óptimo generado</h2>
-            <p class="text-sm text-slate-500 mt-0.5">Dotación ideal/día · Ciclos 5x2/4x3/3x4/2x5 · Cierre ×3 · Relevo por fortaleza · Horas semanales</p>
+            <p class="text-sm text-slate-500 mt-0.5">2 aperturas + 3 cierres prioritarios · Dotación ideal · Ciclos · Mover turnos · Export formato operativo</p>
           </div>
           <div id="weekNavTop" class="flex flex-wrap items-center gap-2"></div>
           <div class="flex gap-2">
@@ -154,7 +154,7 @@
       <div class="mt-8 bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div class="px-4 py-3 bg-slate-50 border-b border-slate-100">
           <h3 class="font-semibold text-primary-800">Cuadrícula crew (sin gerencia)</h3>
-          <p class="text-xs text-slate-500 mt-0.5">Solo crew y crew master. Los 3 cierres van dentro de esta dotación. La gerencia está en su pestaña.</p>
+          <p class="text-xs text-slate-500 mt-0.5">Solo crew y crew master. Prioridad: 2 aperturas + 3 cierres cada día. <strong>Clic en un turno</strong> para moverlo a otro día.</p>
         </div>
         <div class="scroll-x">
           <table class="w-full text-sm">
@@ -216,7 +216,8 @@
           <span class="px-2 py-1 rounded bg-indigo-100 text-indigo-800">RG = Retrasado GL 12:00-21:00</span>
           <span class="px-2 py-1 rounded bg-violet-100 text-violet-800">RA = Retrasado ADM 13:00-22:00</span>
           <span class="px-2 py-1 rounded bg-amber-100 text-amber-800">C = Cierre 18:30-03:30</span>
-          <span class="px-2 py-1 rounded bg-orange-100 text-orange-800">T = Trasnoche 20:00-05:00</span>
+          <span class="px-2 py-1 rounded bg-orange-100 text-orange-800">T = Trasnoche 21:00-06:00</span>
+          <span class="px-2 py-1 rounded bg-pink-100 text-pink-800">CM = Crew Meeting</span>
           <span class="px-2 py-1 rounded bg-emerald-100 text-emerald-800">L = Libre</span>
         </div>
       </div>
@@ -357,9 +358,9 @@ const MGR_SHIFT_TEMPLATES = {
   'RG': { label: 'RETRASADO GL',    start: '12:00', end: '21:00', hours: 9 },
   'RC': { label: 'RETRASADO CORTO', start: '13:00', end: '21:00', hours: 8 },
   'RA': { label: 'RETRASADO ADM',   start: '13:00', end: '22:00', hours: 9 },
-  'C':  { label: 'CIERRE',          start: '16:00', end: '01:00', hours: 9 },
+  'C':  { label: 'CIERRE',          start: '18:30', end: '03:30', hours: 9 },
   'CC': { label: 'CIERRE CORTO',    start: '17:00', end: '01:00', hours: 8 },
-  'T':  { label: 'TRASNOCHE',       start: '18:30', end: '03:30', hours: 9 },
+  'T':  { label: 'TRASNOCHE',       start: '21:00', end: '06:00', hours: 9 },
   'TC': { label: 'TRASNOCHE CORTO', start: '19:30', end: '03:30', hours: 8 },
   'CM': { label: 'CREW MEETING',    start: '10:00', end: '19:00', hours: 9 },
   'L':  { label: 'LIBRE',           start: null,    end: null,    hours: 0 }
@@ -368,10 +369,25 @@ const VALID_MGR_CODES = new Set(Object.keys(MGR_SHIFT_TEMPLATES));
 
 
 function parseTime(val) {
-  if (!val) return null;
-  if (val instanceof Date) return String(val.getHours()).padStart(2,'0')+':'+String(val.getMinutes()).padStart(2,'0');
-  if (typeof val === 'number') { const t=Math.round(val*24*60); return String(Math.floor(t/60)%24).padStart(2,'0')+':'+String(t%60).padStart(2,'0'); }
-  return String(val).substring(0,5);
+  if (val == null || val === '') return null;
+  if (val instanceof Date) {
+    return String(val.getHours()).padStart(2,'0')+':'+String(val.getMinutes()).padStart(2,'0');
+  }
+  if (typeof val === 'number') {
+    // Excel serial time (fraction of day) or minutes
+    let totalMin;
+    if (val >= 0 && val < 1.5) totalMin = Math.round(val * 24 * 60);
+    else if (val >= 1.5 && val < 1440) totalMin = Math.round(val);
+    else totalMin = Math.round((val % 1) * 24 * 60);
+    const h = Math.floor(totalMin / 60) % 24;
+    const m = totalMin % 60;
+    return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');
+  }
+  const s = String(val).trim();
+  // "08:00:00" or "8:00" or "08:00"
+  const m = s.match(/(\d{1,2}):(\d{2})(?::\d{2})?/);
+  if (m) return String(Number(m[1])).padStart(2,'0')+':'+m[2];
+  return s.substring(0,5) || null;
 }
 function timeToMin(t) { if(!t) return 0; const [h,m]=t.split(':').map(Number); return h*60+m; }
 
@@ -409,50 +425,149 @@ function isInWindow(slotStart, slotEnd, windows) {
 }
 
 function processWorkbook(wb) {
-  const conf = XLSX.utils.sheet_to_json(wb.Sheets['CONFIGURACIÓN']||wb.Sheets['CONFIGURACION'], {header:1, defval:null});
+  const sheetNames = wb.SheetNames || [];
+  const findSheet = (...cands) => {
+    for (const c of cands) {
+      const hit = sheetNames.find(n => n.toLowerCase().replace(/[áéíóú]/g, m => ({á:'a',é:'e',í:'i',ó:'o',ú:'u'}[m]||m)) === c.toLowerCase().replace(/[áéíóú]/g, m => ({á:'a',é:'e',í:'i',ó:'o',ú:'u'}[m]||m)));
+      if (hit) return wb.Sheets[hit];
+    }
+    for (const c of cands) {
+      const hit = sheetNames.find(n => n.toLowerCase().includes(c.toLowerCase().slice(0,6)));
+      if (hit) return wb.Sheets[hit];
+    }
+    return null;
+  };
+
+  const confSheet = findSheet('CONFIGURACIÓN', 'CONFIGURACION', 'Configuración');
+  if (!confSheet) throw new Error('No encontré la hoja CONFIGURACIÓN. Hojas: ' + sheetNames.join(', '));
+  const conf = XLSX.utils.sheet_to_json(confSheet, {header:1, defval:null});
+
   let storeName='Tienda', metaFte=2.2, totalStaff=0, ticketsMonth=0, capacity=5;
+  let minOpen=2, minClose=3, minPostClose=3;
   const storeHours=[];
   for (let r=0;r<conf.length;r++) {
     const row=conf[r]; if(!row||!row[0]) continue;
     const key=String(row[0]).trim().toLowerCase();
-    if(key==='tienda') storeName=row[1]||storeName;
+    if(key==='tienda') storeName=String(row[1]||storeName).trim();
     if(key==='meta fte de la tienda') metaFte=Number(row[1])||metaFte;
-    if(key==='dotación total') totalStaff=Number(row[1])||totalStaff;
+    if(key==='dotación total' || key==='dotacion total') totalStaff=Number(row[1])||totalStaff;
     if(key.includes('tickets mensuales')) ticketsMonth=Number(row[1])||ticketsMonth;
+    if(key.includes('mínimo apertura') || key.includes('minimo apertura')) minOpen=Number(row[1])||minOpen;
+    if(key.includes('mínimo cierre') || key.includes('minimo cierre')) minClose=Number(row[1])||minClose;
+    if(key.includes('mínimo post') || key.includes('minimo post')) minPostClose=Number(row[1])||minPostClose;
+    // Also check col 10/11 for mínimos (layout of this template)
+    if (row[9] != null) {
+      const k10 = String(row[9]).trim().toLowerCase();
+      if (k10.includes('mínimo apertura') || k10.includes('minimo apertura')) minOpen=Number(row[10])||minOpen;
+      if (k10.includes('mínimo cierre') || k10.includes('minimo cierre')) minClose=Number(row[10])||minClose;
+      if (k10.includes('mínimo post') || k10.includes('minimo post')) minPostClose=Number(row[10])||minPostClose;
+    }
     if(key==='día'||key==='dia') {
-      for(let i=r+1;i<r+8&&i<conf.length;i++){ const h=conf[i]; if(!h||!h[0])break;
-        storeHours.push({day:h[0], openPublic:parseTime(h[2]), closePublic:parseTime(h[3]), hoursPublic:h[6]}); }
+      for(let i=r+1;i<r+10&&i<conf.length;i++){
+        const h=conf[i]; if(!h||!h[0]) break;
+        const dayName=String(h[0]).trim();
+        if (!DAYS.includes(dayName)) break;
+        storeHours.push({
+          day: dayName,
+          openTeam: parseTime(h[1]),
+          openPublic: parseTime(h[2]),
+          closePublic: parseTime(h[3]),
+          closeTeam: parseTime(h[4]),
+          hoursTeam: Number(h[5])||null,
+          hoursPublic: Number(h[6])||null
+        });
+      }
     }
   }
 
-  const teamRaw=XLSX.utils.sheet_to_json(wb.Sheets['EQUIPO'],{header:1,defval:null});
+  const eqSheet = findSheet('EQUIPO');
+  if (!eqSheet) throw new Error('No encontré la hoja EQUIPO');
+  const teamRaw=XLSX.utils.sheet_to_json(eqSheet,{header:1,defval:null});
   const team=[]; let headerIdx=-1;
   for(let r=0;r<teamRaw.length;r++) if(teamRaw[r]&&String(teamRaw[r][0]).toUpperCase()==='ID'){headerIdx=r;break;}
-  if(headerIdx>=0) for(let r=headerIdx+1;r<teamRaw.length;r++){
+  if(headerIdx<0) throw new Error('En EQUIPO no encontré la fila de encabezado con ID');
+  for(let r=headerIdx+1;r<teamRaw.length;r++){
     const row=teamRaw[r]; if(!row||!row[0]||!row[1]) continue;
-    team.push({id:row[0], name:String(row[1]).trim(), role:row[2]||'Crew', level:row[3]||3, strength:row[4]||'', weeklyHours:Number(row[5])||0, cycle:row[6]||'5x2', colacion:row[10]||'30 MIN'});
+    const name=String(row[1]).trim();
+    if (!name || name==='0') continue;
+    const colacionRaw = row[10] != null ? String(row[10]) : (row[11] != null ? String(row[11]) : '30 MIN');
+    team.push({
+      id: row[0],
+      name,
+      role: String(row[2]||'Crew').trim(),
+      level: Number(row[3])||3,
+      strength: String(row[4]||'').trim(),
+      weeklyHours: Number(row[5])||0,
+      cycle: String(row[6]||'5x2').trim(),
+      workDays: Number(row[7])||null,
+      freeDays: Number(row[8])||null,
+      hoursPerDay: Number(row[9])||null,
+      colacion: colacionRaw,
+      isMaster: /master/i.test(String(row[2]||''))
+    });
   }
+  if (!team.length) throw new Error('EQUIPO: no se cargó ningún miembro del equipo');
 
-  const dispRaw=XLSX.utils.sheet_to_json(wb.Sheets['DISPONIBILIDAD'],{header:1,defval:null});
+  const dispSheet = findSheet('DISPONIBILIDAD');
+  if (!dispSheet) throw new Error('No encontré la hoja DISPONIBILIDAD');
+  const dispRaw=XLSX.utils.sheet_to_json(dispSheet,{header:1,defval:null});
   const availability={}; let dHeader=-1;
   for(let r=0;r<dispRaw.length;r++) if(dispRaw[r]&&String(dispRaw[r][0]).toUpperCase()==='ID'){dHeader=r;break;}
   if(dHeader>=0) for(let r=dHeader+1;r<dispRaw.length;r++){
     const row=dispRaw[r]; if(!row||!row[0]) continue;
-    availability[row[0]]={lun:parseAvail(row[3]),mar:parseAvail(row[4]),mie:parseAvail(row[5]),jue:parseAvail(row[6]),vie:parseAvail(row[7]),sab:parseAvail(row[8]),dom:parseAvail(row[9])};
+    if (String(row[1]||'').trim()==='' || String(row[1]).trim()==='0') continue;
+    availability[row[0]]={
+      lun:parseAvail(row[3]), mar:parseAvail(row[4]), mie:parseAvail(row[5]),
+      jue:parseAvail(row[6]), vie:parseAvail(row[7]), sab:parseAvail(row[8]), dom:parseAvail(row[9])
+    };
   }
 
-  const dpRaw=XLSX.utils.sheet_to_json(wb.Sheets['DAYPART'],{header:1,defval:null});
+  const dpSheet = findSheet('DAYPART');
+  if (!dpSheet) throw new Error('No encontré la hoja DAYPART');
+  const dpRaw=XLSX.utils.sheet_to_json(dpSheet,{header:1,defval:null});
   const daypart=[];
-  for(let r=1;r<dpRaw.length;r++){ const row=dpRaw[r]; if(!row||!row[2]) continue;
-    let pct=Number(row[3])||0; if(pct>0.5) pct=0;
-    daypart.push({slot:row[2], start:parseTime(row[0]), end:parseTime(row[1]), pct, required:Math.min(Number(row[7])||0,12)});
+  for(let r=0;r<dpRaw.length;r++){
+    const row=dpRaw[r]; if(!row) continue;
+    const start = parseTime(row[0]);
+    const end = parseTime(row[1]);
+    if (!start || !end) continue;
+    let pct=Number(row[3]);
+    if (!Number.isFinite(pct) || pct < 0) pct = 0;
+    if (pct > 1) pct = pct / 100; // allow percent as 0-100
+    if (pct > 0.5) pct = 0; // safety: daypart fractions should be small
+    const req = Math.min(Math.max(0, Math.round(Number(row[7])||0)), 20);
+    daypart.push({
+      slot: row[2] || (start + ' - ' + end),
+      start, end, pct, required: req
+    });
   }
+  if (!daypart.length) throw new Error('DAYPART: no se cargaron franjas horarias');
 
-  const fcRaw=XLSX.utils.sheet_to_json(wb.Sheets['FORECAST DIARIO'],{header:1,defval:null});
+  const fcSheet = findSheet('FORECAST DIARIO', 'FORECAST');
   const forecast=[];
-  for(const row of fcRaw){ if(!row||!row[0]) continue; const day=String(row[0]).trim();
-    if(DAYS.includes(day)) forecast.push({day, tickets:Number(row[1])||0});
-    if(String(row[0]||'').toLowerCase().includes('meta tickets')){ const v=Number(row[1]); if(v>0&&v<50) capacity=v; }
+  if (fcSheet) {
+    const fcRaw=XLSX.utils.sheet_to_json(fcSheet,{header:1,defval:null});
+    for(const row of fcRaw){
+      if(!row||row[0]==null) continue;
+      const label = String(row[0]).trim();
+      if(DAYS.includes(label)) forecast.push({day: label, tickets: Number(row[1])||0});
+      const low = label.toLowerCase();
+      if (low.includes('meta tickets') || low.includes('tickets / hora') || low.includes('tickets/hora')) {
+        const v = Number(row[1]);
+        if (v > 0 && v < 50) capacity = v;
+      }
+    }
+  }
+  // Fallback capacity from CONFIG if still default
+  for (let r=0;r<conf.length;r++) {
+    const row=conf[r]; if(!row) continue;
+    for (let c=0;c<row.length;c++) {
+      const cell = String(row[c]||'').toLowerCase();
+      if (cell.includes('meta tickets') || cell.includes('tickets / hora-persona') || cell.includes('tickets/hora-persona')) {
+        const v = Number(row[c+1]);
+        if (v > 0 && v < 50) capacity = v;
+      }
+    }
   }
 
   // Conservar horario gerencial si ya estaba cargado
@@ -460,14 +575,18 @@ function processWorkbook(wb) {
   const prevMgrShifts = state.managerShifts;
   const prevLoaded = state.managerScheduleLoaded;
   const prevSrc = state.managerSourceFile;
+  const prevWeeks = state.managerWeeks;
+  const prevWeek = state.managerWeek;
 
   state = {
     store: storeName,
-    config: { metaFte, totalStaff, ticketsMonth, capacity },
+    config: { metaFte, totalStaff, ticketsMonth, capacity, minOpen, minClose, minPostClose },
     team, availability, daypart, forecast, hours: storeHours,
     generated: null,
     managers: prevLoaded && prevManagers && prevManagers.length ? prevManagers : DEFAULT_MANAGERS.map(m => ({...m})),
     managerShifts: prevLoaded && prevMgrShifts ? prevMgrShifts : {},
+    managerWeeks: prevLoaded && prevWeeks ? prevWeeks : {},
+    managerWeek: prevWeek || 1,
     mgrFills: [],
     managerScheduleLoaded: !!prevLoaded,
     managerSourceFile: prevSrc || null
@@ -476,13 +595,17 @@ function processWorkbook(wb) {
 
 function generateSchedule() {
   const capacity = state.config.capacity || 5;
+  const minOpen = state.config.minOpen || 2;
+  const minClose = state.config.minClose || 3;
+  const minPostClose = state.config.minPostClose || 3;
   // Ensure managers loaded
   if (!state.managers || !state.managers.length) state.managers = DEFAULT_MANAGERS.map(m => ({...m}));
 
   const MIN_SHIFT_H = 4;
   const MAX_SHIFT_H = 10;
   const HALF = 0.5;
-  const MIN_CLOSERS = 3;
+  const MIN_CLOSERS = minClose;
+  const MIN_OPENERS = minOpen;
 
   // Dotación ideal SOLO de crew (masters incluidos). La gerencia se suma aparte.
   const IDEAL_HEADCOUNT = {
@@ -596,6 +719,18 @@ function generateSchedule() {
     slotPeople[day] = {};
     slots.forEach((_, i) => { slotPeople[day][i] = []; });
 
+    // Franjas de apertura (desde inicio de equipo / público hasta ~11:00)
+    const openSlotIdxs = [];
+    slots.forEach((s, i) => {
+      let sm = timeToMin(s.start);
+      if (sm >= 22*60) return; // noche, no es apertura
+      if (sm <= 11*60) openSlotIdxs.push(i);
+    });
+    if (openSlotIdxs.length === 0 && slots.length) {
+      for (let i = 0; i < Math.min(4, slots.length); i++) openSlotIdxs.push(i);
+    }
+
+    // Franjas de cierre (desde ~22:00 o cierre público)
     const closeSlotIdxs = [];
     slots.forEach((s, i) => {
       let sm = timeToMin(s.start);
@@ -710,10 +845,66 @@ function generateSchedule() {
       return score;
     }
 
-    // PHASE 0: 3 cierres obligatorios. Cuentan en la dotación del día.
+    // ============================================================
+    // PRIORIDAD OBLIGATORIA: 2 aperturas + 3 cierres TODOS los días
+    // Luego se rellena la dotación ideal. No se "gasta" gente en
+    // cierres extra antes de asegurar apertura.
+    // ============================================================
+    const openerIds = new Set();
+    const closerIds = new Set();
+
+    function pickOpener(relaxed) {
+      const canOpen = shuffle(candidates.filter(p => {
+        if (assignedTodayIds.has(p.id) || daysWorked[p.id] >= p.maxDays) return false;
+        if (remaining[p.id] < 4) return false;
+        for (const w of p.windows) {
+          for (const i of openSlotIdxs) {
+            if (slots[i] && isInWindow(slots[i].start, slots[i].end, [w])) return true;
+          }
+        }
+        return false;
+      }));
+      for (const person of canOpen) {
+        if (openerIds.size >= MIN_OPENERS) break;
+        let best = null;
+        for (const w of person.windows) {
+          for (let s = 0; s < slots.length; s++) {
+            for (let e = s; e < slots.length; e++) {
+              const hours = (e - s + 1) * HALF;
+              const minH = relaxed ? 4 : (person.minShift || MIN_SHIFT_H);
+              const maxH = person.maxShift || MAX_SHIFT_H;
+              if (hours < minH || hours > maxH) continue;
+              if (hours > remaining[person.id]) continue;
+              if (!isInWindow(slots[s].start, slots[e].end, [w])) continue;
+              let coversOpen = 0;
+              for (let i = s; i <= e; i++) if (openSlotIdxs.includes(i)) coversOpen++;
+              // Debe cubrir al menos 2 franjas de apertura (1h)
+              if (coversOpen < 2) continue;
+              // Preferir turnos de apertura (temprano), no de cierre
+              let coversClose = 0;
+              for (let i = s; i <= e; i++) if (closeSlotIdxs.includes(i)) coversClose++;
+              const score = coversOpen * 40 - coversClose * 15 + (relaxed ? 0 : (10 - Math.abs(hours - (person.targetShift || 6))));
+              if (!best || score > best.score) best = { s, e, score };
+            }
+          }
+        }
+        if (best) {
+          if (tryAssignBlock(person, best.s, best.e)) {
+            openerIds.add(person.id);
+            const last = shifts[shifts.length - 1];
+            if (last && last.empId === person.id && last.day === day) {
+              last.type = 'APERTURA';
+              last.isOpener = true;
+            }
+          }
+        }
+      }
+    }
+
     function pickCloser(relaxed) {
       const canClose = shuffle(candidates.filter(p => {
         if (assignedTodayIds.has(p.id) || daysWorked[p.id] >= p.maxDays) return false;
+        if (remaining[p.id] < 4) return false;
         for (const w of p.windows) {
           for (const i of closeSlotIdxs) {
             if (slots[i] && isInWindow(slots[i].start, slots[i].end, [w])) return true;
@@ -723,7 +914,6 @@ function generateSchedule() {
       }));
       for (const person of canClose) {
         if (closerIds.size >= MIN_CLOSERS) break;
-        if (remaining[person.id] < 4) continue;
         let best = null;
         for (const w of person.windows) {
           for (let s = 0; s < slots.length; s++) {
@@ -743,21 +933,26 @@ function generateSchedule() {
           }
         }
         if (best) {
-          person._asCloser = true;
           if (tryAssignBlock(person, best.s, best.e)) {
             closerIds.add(person.id);
             const last = shifts[shifts.length - 1];
-            if (last && last.empId === person.id && last.day === day) last.type = 'CIERRE';
+            if (last && last.empId === person.id && last.day === day) {
+              last.type = 'CIERRE';
+              last.isCloser = true;
+            }
           }
-          person._asCloser = false;
         }
       }
     }
-    const closerIds = new Set();
+
+    // 1) Primero aperturas (2)
+    pickOpener(false);
+    if (openerIds.size < MIN_OPENERS) pickOpener(true);
+    // 2) Luego cierres (3)
     pickCloser(false);
     if (closerIds.size < MIN_CLOSERS) pickCloser(true);
 
-    // PHASE 1: reach ideal headcount for the day + cover demand
+    // PHASE 1: rellenar dotación ideal del día (después de apertura+cierre)
     // Target: assignedTodayIds.size ~= idealN
     let safety = 0;
     while (safety < 250) {
@@ -789,6 +984,17 @@ function generateSchedule() {
               if (needMorePeople) score += 40;
               // On peak days push harder
               if (peakDays.has(day) && needMorePeople) score += 20;
+              // Evitar cierres extra si ya hay MIN_CLOSERS (no saturar cierre)
+              let coversClose = 0;
+              for (let i = s; i <= e; i++) if (closeSlotIdxs.includes(i)) coversClose++;
+              if (closerIds.size >= MIN_CLOSERS && coversClose >= 2) score -= 25;
+              // Preferir cubrir franjas con déficit
+              let deficitBoost = 0;
+              for (let i = s; i <= e; i++) {
+                const lack = (slots[i].required || 0) - (coverage[day][i] || 0);
+                if (lack > 0) deficitBoost += lack * 8;
+              }
+              score += deficitBoost;
 
               if (score > best.score) best = { score, person, s, e };
             }
@@ -1164,9 +1370,13 @@ function renderSchedule() {
     const rows=crewShifts.map(s=>`<tr class="hover:bg-slate-50 ${s.isCloser||s.type==='CIERRE'?'bg-amber-50':''}"><td class="px-3 py-1.5 font-medium">${s.name}</td><td class="px-3 py-1.5 text-xs">${s.role}${s.strength?' · '+s.strength:''}</td><td class="px-3 py-1.5 font-mono">${s.start}</td><td class="px-3 py-1.5 font-mono">${s.end}</td><td class="px-3 py-1.5 text-right">${s.hours}h</td><td class="px-3 py-1.5 text-xs">${s.breakMin?s.breakMin+' min':'—'}</td><td class="px-3 py-1.5"><span class="text-xs px-2 py-0.5 rounded ${s.isCloser||s.type==='CIERRE'?'bg-amber-200':'bg-slate-100'}">${s.type}</span></td></tr>`).join('');
     const dayHours=crewShifts.reduce((s,x)=>s+x.hours,0);
     const nClosers = crewShifts.filter(s => s.type === 'CIERRE' || s.isCloser).length;
-    const closerCls = nClosers >= 3 ? 'text-emerald-700' : 'text-red-700';
+    const nOpeners = crewShifts.filter(s => s.type === 'APERTURA' || s.isOpener).length;
+    const minO = (state.config && state.config.minOpen) || 2;
+    const minC = (state.config && state.config.minClose) || 3;
+    const closerCls = nClosers >= minC ? 'text-emerald-700' : 'text-red-700';
+    const openerCls = nOpeners >= minO ? 'text-emerald-700' : 'text-red-700';
     const crewCls = nCrew === ideal ? 'text-emerald-700' : 'text-red-700';
-    return `<div class="bg-white rounded-xl border border-slate-200 overflow-hidden"><div class="px-4 py-3 bg-slate-50 border-b border-slate-100 flex flex-wrap justify-between items-center gap-2"><h3 class="font-semibold text-primary-800">${day}</h3><span class="text-sm text-slate-500"><strong class="${crewCls}">${nCrew}/${ideal} crew</strong> (de ellos <strong class="${closerCls}">${nClosers}/3 cierre</strong>) + <strong>${mgrShifts.length} gerencia aparte</strong> · ${Math.round(dayHours*10)/10}h crew · ${nMaster} master</span></div><div class="scroll-x"><table class="w-full text-sm"><thead><tr class="text-slate-500 text-xs"><th class="px-3 py-2 text-left">Persona</th><th class="px-3 py-2 text-left">Cargo / Fortaleza</th><th class="px-3 py-2 text-left">Inicio</th><th class="px-3 py-2 text-left">Fin</th><th class="px-3 py-2 text-right">Horas</th><th class="px-3 py-2 text-left">Colación</th><th class="px-3 py-2 text-left">Tipo</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    return `<div class="bg-white rounded-xl border border-slate-200 overflow-hidden"><div class="px-4 py-3 bg-slate-50 border-b border-slate-100 flex flex-wrap justify-between items-center gap-2"><h3 class="font-semibold text-primary-800">${day}</h3><span class="text-sm text-slate-500"><strong class="${crewCls}">${nCrew}/${ideal} crew</strong> · <strong class="${openerCls}">${nOpeners}/${minO} apertura</strong> · <strong class="${closerCls}">${nClosers}/${minC} cierre</strong> + <strong>${mgrShifts.length} gerencia</strong> · ${Math.round(dayHours*10)/10}h · ${nMaster} master</span></div><div class="scroll-x"><table class="w-full text-sm"><thead><tr class="text-slate-500 text-xs"><th class="px-3 py-2 text-left">Persona</th><th class="px-3 py-2 text-left">Cargo / Fortaleza</th><th class="px-3 py-2 text-left">Inicio</th><th class="px-3 py-2 text-left">Fin</th><th class="px-3 py-2 text-right">Horas</th><th class="px-3 py-2 text-left">Colación</th><th class="px-3 py-2 text-left">Tipo</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
   }).join('');
 }
 
@@ -1187,13 +1397,11 @@ function renderWeekGrid() {
   const body = document.getElementById('weekGridBody');
   if (!g || !body) return;
 
-  // Map: empId -> day -> shift
   const byPerson = {};
   state.team.forEach(p => { byPerson[p.id] = { person: p, days: {} }; });
   g.shifts.forEach(s => {
     if (s.isManager) return;
     if (!byPerson[s.empId]) byPerson[s.empId] = { person: { id:s.empId, name:s.name, role:s.role, strength:s.strength }, days: {} };
-    // if multiple shifts same day, keep longest or concatenate
     const prev = byPerson[s.empId].days[s.day];
     if (!prev || s.hours > prev.hours) byPerson[s.empId].days[s.day] = s;
   });
@@ -1205,22 +1413,148 @@ function renderWeekGrid() {
   body.innerHTML = rows.map(({ person, days }) => {
     const cells = DAYS.map(day => {
       const s = days[day];
-      if (!s) return '<td class="px-1.5 py-1.5 text-slate-400 text-xs">—</td>';
+      if (!s) return '<td class="px-1.5 py-1.5 text-slate-400 text-xs text-center">—</td>';
       const cierre = s.isCloser || s.type === 'CIERRE';
+      const aper = s.isOpener || s.type === 'APERTURA';
+      let bg = 'bg-emerald-50 text-emerald-900';
+      if (cierre) bg = 'bg-amber-100 text-amber-950';
+      else if (aper) bg = 'bg-sky-100 text-sky-950';
       const col = s.breakMin ? `<div class="text-[10px] text-slate-500">Colación ${s.breakMin}min</div>` : '';
-      return `<td class="px-1.5 py-1.5 text-xs ${cierre ? 'bg-amber-100 text-amber-950' : 'bg-emerald-50 text-emerald-900'}">
+      const tipo = cierre ? 'CIERRE' : (aper ? 'APERTURA' : (s.type || ''));
+      return `<td class="px-1.5 py-1.5 text-xs ${bg} cursor-pointer hover:ring-2 hover:ring-accent-500 relative group"
+        data-move-emp="${s.empId}" data-move-day="${day}" title="Clic para mover a otro día">
         <div class="font-medium">${s.start} – ${s.end}</div>
-        <div class="text-[10px]">${s.hours}h · ${cierre ? 'CIERRE' : s.type}</div>
+        <div class="text-[10px]">${s.hours}h · ${tipo}</div>
         ${col}
+        <div class="text-[9px] text-slate-500 mt-0.5 opacity-0 group-hover:opacity-100">↕ Mover</div>
       </td>`;
     }).join('');
     return `<tr class="hover:bg-slate-50 border-b border-slate-100">
-      <td class="px-2 py-1.5 font-medium sticky left-0 bg-white z-10">${person.name}</td>
+      <td class="px-2 py-1.5 font-medium sticky left-0 bg-white z-10 text-xs">${person.name}</td>
       <td class="px-2 py-1.5 text-xs">${person.role||''}</td>
       <td class="px-2 py-1.5 text-xs">${person.strength||'—'}</td>
       ${cells}
     </tr>`;
   }).join('');
+
+  body.querySelectorAll('[data-move-emp]').forEach(td => {
+    td.addEventListener('click', () => openMoveShiftModal(td.dataset.moveEmp, td.dataset.moveDay));
+  });
+}
+
+function openMoveShiftModal(empId, fromDay) {
+  const g = state.generated;
+  if (!g) return;
+  const shift = g.shifts.find(s => !s.isManager && String(s.empId) === String(empId) && s.day === fromDay);
+  if (!shift) return;
+
+  const person = state.team.find(p => String(p.id) === String(empId));
+  const name = shift.name || (person && person.name) || empId;
+
+  // Días destino posibles: sin turno ese día + con disponibilidad
+  const occupied = new Set(g.shifts.filter(s => !s.isManager && String(s.empId) === String(empId)).map(s => s.day));
+  const options = DAYS.filter(d => d !== fromDay).map(d => {
+    const hasShift = occupied.has(d);
+    const av = state.availability[empId] || state.availability[Number(empId)];
+    const dayKey = DAY_KEYS[DAYS.indexOf(d)];
+    const windows = av && av[dayKey];
+    let okAvail = false;
+    if (windows && windows.length) {
+      okAvail = isInWindow(shift.start, shift.end, windows);
+    }
+    const disabled = hasShift || !windows;
+    let reason = '';
+    if (hasShift) reason = 'ya tiene turno';
+    else if (!windows) reason = 'sin disponibilidad';
+    else if (!okAvail) reason = 'fuera de ventana (se permite igual)';
+    return { day: d, disabled: hasShift || !windows, reason, soft: !okAvail && !!windows };
+  });
+
+  const existing = document.getElementById('moveShiftModal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'moveShiftModal';
+  modal.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4';
+  modal.innerHTML = `
+    <div class="bg-white rounded-xl shadow-xl max-w-md w-full p-5">
+      <h3 class="text-lg font-semibold text-primary-800 mb-1">Mover turno</h3>
+      <p class="text-sm text-slate-600 mb-4"><strong>${name}</strong> · ${fromDay} · ${shift.start}–${shift.end} (${shift.hours}h)</p>
+      <p class="text-xs text-slate-500 mb-2">Elige el día destino. Se mantiene el mismo horario de inicio/fin.</p>
+      <div class="space-y-2 max-h-64 overflow-y-auto mb-4" id="moveDayOptions">
+        ${options.map(o => `
+          <button type="button" data-to="${o.day}" ${o.disabled ? 'disabled' : ''}
+            class="w-full text-left px-3 py-2 rounded-lg border text-sm ${o.disabled ? 'opacity-40 cursor-not-allowed bg-slate-50' : 'hover:border-accent-500 hover:bg-blue-50 border-slate-200'}">
+            <span class="font-medium">${o.day}</span>
+            ${o.reason ? `<span class="text-xs text-slate-500 ml-2">(${o.reason})</span>` : ''}
+            ${o.soft && !o.disabled ? '<span class="text-xs text-amber-600 ml-1">⚠ fuera de ventana</span>' : ''}
+          </button>`).join('')}
+      </div>
+      <div class="flex justify-end gap-2">
+        <button type="button" id="moveCancel" class="px-4 py-2 text-sm rounded-lg bg-slate-100 text-slate-700">Cancelar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  modal.querySelector('#moveCancel').onclick = () => modal.remove();
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+  modal.querySelectorAll('[data-to]').forEach(btn => {
+    if (btn.disabled) return;
+    btn.addEventListener('click', () => {
+      moveShift(empId, fromDay, btn.dataset.to);
+      modal.remove();
+    });
+  });
+}
+
+function moveShift(empId, fromDay, toDay) {
+  const g = state.generated;
+  if (!g || fromDay === toDay) return;
+
+  const idx = g.shifts.findIndex(s => !s.isManager && String(s.empId) === String(empId) && s.day === fromDay);
+  if (idx < 0) return;
+
+  // No permitir si ya tiene turno en destino
+  if (g.shifts.some(s => !s.isManager && String(s.empId) === String(empId) && s.day === toDay)) {
+    alert('Esta persona ya tiene turno el ' + toDay);
+    return;
+  }
+
+  const shift = g.shifts[idx];
+  const oldDay = shift.day;
+  shift.day = toDay;
+
+  // Recalcular cobertura de forma simple
+  rebuildCoverageFromShifts();
+  renderSchedule();
+  renderWeekGrid();
+  renderCoverage();
+  if (typeof renderMetrics === 'function') try { renderMetrics(); } catch (_) {}
+}
+
+function rebuildCoverageFromShifts() {
+  const g = state.generated;
+  if (!g || !g.slots) return;
+  DAYS.forEach(day => {
+    g.coverage[day] = g.slots.map(() => 0);
+  });
+  g.shifts.filter(s => !s.isManager).forEach(s => {
+    const daySlots = g.slots;
+    if (!daySlots || !g.coverage[s.day]) return;
+    const startM = timeToMin(s.start);
+    let endM = timeToMin(s.end);
+    if (endM <= startM) endM += 1440;
+    daySlots.forEach((slot, i) => {
+      let ss = timeToMin(slot.start);
+      let se = timeToMin(slot.end);
+      if (se <= ss) se += 1440;
+      // overlap
+      let a = startM, b = endM;
+      if (ss < 8*60 && startM >= 12*60) { /* overnight shift vs morning slot */ }
+      if (ss >= a && ss < b) g.coverage[s.day][i]++;
+      else if (a >= ss && a < se) g.coverage[s.day][i]++;
+    });
+  });
 }
 
 
@@ -1365,10 +1699,35 @@ function processManagerWorkbook(wb, fileName) {
   }
   if (!managers.length) throw new Error('Encontré las semanas, pero no los nombres de gerentes en la columna B.');
 
+  // Fechas bajo el encabezado L M M J V S D (fila headerIdx+1 suele tener números de día)
+  const monthNames = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+  const weekDatesAll = {};
+  weeks.forEach(w => {
+    const dateRow = rows[headerIdx + 1] || [];
+    const dates = {};
+    DAYS.forEach((day, di) => {
+      const raw = dateRow[w.col + di];
+      if (raw == null || raw === '') return;
+      // puede ser número (día del mes) o fecha
+      if (typeof raw === 'number' && raw >= 1 && raw <= 31) {
+        dates[day] = String(raw);
+      } else if (raw instanceof Date) {
+        dates[day] = raw.getDate() + '-' + monthNames[raw.getMonth()];
+      } else {
+        const s = String(raw).trim();
+        if (/^\d{1,2}$/.test(s)) dates[day] = s;
+        else if (s.length <= 8) dates[day] = s;
+      }
+    });
+    weekDatesAll[w.index] = dates;
+  });
+
   state.managers = managers;
   state.managerWeeks = byWeek;
+  state.managerWeekDates = weekDatesAll;
   state.managerWeek = state.managerWeek && byWeek[state.managerWeek] ? state.managerWeek : 1;
   state.managerShifts = JSON.parse(JSON.stringify(byWeek[state.managerWeek]));
+  state.weekDates = weekDatesAll[state.managerWeek] || {};
   state.managerScheduleLoaded = true;
   state.managerSourceFile = (fileName || 'gerencia') + ' · ' + preferred;
   renderWeekPicker();
@@ -1402,6 +1761,7 @@ function renderWeekPicker() {
         if (!weeks[next]) return;
         state.managerWeek = next;
         state.managerShifts = JSON.parse(JSON.stringify(weeks[next]));
+        state.weekDates = (state.managerWeekDates && state.managerWeekDates[next]) || {};
         renderWeekPicker();
         renderManagerGrid();
         if (state.team && state.team.length) generateSchedule();
@@ -1482,14 +1842,146 @@ function clearManagerSchedule() {
 
 
 function exportExcel() {
-  if(!state.generated) return;
-  const wb=XLSX.utils.book_new();
-  const shiftData=[['Día','Nombre','Cargo','Fortaleza','Inicio','Fin','Horas','Colación (min)','Tipo'],
-    ...state.generated.shifts.sort((a,b)=>DAYS.indexOf(a.day)-DAYS.indexOf(b.day)||a.start.localeCompare(b.start))
-      .map(s=>[s.day,s.name,s.role,s.strength,s.start,s.end,s.hours,s.breakMin||0,s.type])];
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(shiftData),'Horario óptimo');
+  if (!state.generated) return;
+  const wb = XLSX.utils.book_new();
+  const g = state.generated;
+  const crewShifts = g.shifts.filter(s => !s.isManager)
+    .sort((a,b) => DAYS.indexOf(a.day) - DAYS.indexOf(b.day) || a.start.localeCompare(b.start) || a.name.localeCompare(b.name));
 
-  // Hoja Horario Gerencial
+  // ---- Fechas de la semana (si hay gerencia con fechas en el Excel, usar; si no, placeholder) ----
+  const weekDates = state.weekDates || {}; // day -> "19-oct" etc.
+  const dayHeaders = DAYS.map(d => {
+    const dt = weekDates[d];
+    return dt ? (d.toUpperCase().replace('Á','A').replace('É','E') + ' ' + dt) : d.toUpperCase().replace('Á','A').replace('É','E');
+  });
+
+  // Map persona -> día -> shift
+  const byPerson = {};
+  state.team.forEach(p => { byPerson[p.id] = { person: p, days: {} }; });
+  crewShifts.forEach(s => {
+    if (!byPerson[s.empId]) byPerson[s.empId] = { person: { id: s.empId, name: s.name, role: s.role, strength: s.strength, weeklyHours: s.weeklyHours }, days: {} };
+    const prev = byPerson[s.empId].days[s.day];
+    if (!prev || s.hours > prev.hours) byPerson[s.empId].days[s.day] = s;
+  });
+
+  const people = Object.values(byPerson)
+    .filter(x => Object.keys(x.days).length > 0 || (x.person.weeklyHours > 0))
+    .sort((a,b) => a.person.name.localeCompare(b.person.name));
+
+  // ============================================================
+  // HOJA PRINCIPAL: "Horario de trabajo Crew" (formato BK impreso)
+  // Cada celda de día usa 2 filas: inicio arriba, fin abajo
+  // ============================================================
+  // Layout columnas: # | Nombre | Horas | Lun..Dom (cada día = 1 col) | FIRMA
+  // Filas por persona: 2 filas (start / end)
+
+  const aoa = [];
+  // Título
+  aoa.push(['Horario de trabajo Crew', '', '', state.store || '', '', '', '', '', '', '']);
+  aoa.push(['Tienda: ' + (state.store || ''), '', '', '', '', '', '', '', '', '']);
+  aoa.push([]);
+
+  // Encabezado
+  const header = ['#', 'Nombre', 'Horas', ...dayHeaders, 'FIRMA'];
+  aoa.push(header);
+
+  // Contadores apertura / cierre / trasnoche por día
+  const countOpen = {}; const countClose = {}; const countTrans = {};
+  DAYS.forEach(d => { countOpen[d] = 0; countClose[d] = 0; countTrans[d] = 0; });
+
+  people.forEach((entry, idx) => {
+    const p = entry.person;
+    const rowStart = [idx + 1, p.name, p.weeklyHours || ''];
+    const rowEnd   = ['', '', ''];
+    DAYS.forEach(day => {
+      const s = entry.days[day];
+      if (!s) {
+        rowStart.push('LIBRE');
+        rowEnd.push('');
+      } else {
+        rowStart.push(s.start);
+        rowEnd.push(s.end);
+        // clasificar
+        const sm = timeToMin(s.start);
+        const em = timeToMin(s.end);
+        if (s.type === 'APERTURA' || s.isOpener || sm <= 10 * 60) countOpen[day]++;
+        if (s.type === 'CIERRE' || s.isCloser || (sm >= 16 * 60) || (em > 0 && em <= 6 * 60)) countClose[day]++;
+        if (s.type === 'TRASNOCHE' || (sm >= 20 * 60) || (em > 0 && em <= 7 * 60 && sm >= 18 * 60)) countTrans[day]++;
+      }
+    });
+    rowStart.push(''); // FIRMA
+    rowEnd.push('');
+    aoa.push(rowStart);
+    aoa.push(rowEnd);
+  });
+
+  aoa.push([]);
+  // Totales Apertura / Cierre / Trasnoche
+  aoa.push(['', 'Apertura', '', ...DAYS.map(d => countOpen[d]), '']);
+  aoa.push(['', 'Cierre', '', ...DAYS.map(d => countClose[d]), '']);
+  aoa.push(['', 'Trasnoche', '', ...DAYS.map(d => countTrans[d]), '']);
+
+  const wsCrew = XLSX.utils.aoa_to_sheet(aoa);
+
+  // Anchos de columna
+  wsCrew['!cols'] = [
+    { wch: 4 }, { wch: 32 }, { wch: 7 },
+    ...DAYS.map(() => ({ wch: 12 })),
+    { wch: 10 }
+  ];
+
+  // Merge título
+  wsCrew['!merges'] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 3 } },
+    { s: { r: 1, c: 0 }, e: { r: 1, c: 3 } }
+  ];
+
+  // Estilos básicos via cell notes no disponibles en sheetjs community;
+  // marcamos LIBRE y unimos visualmente con valor
+  XLSX.utils.book_append_sheet(wb, wsCrew, 'Horario Crew');
+
+  // ============================================================
+  // Versión compacta 1 fila por persona (más fácil de editar)
+  // ============================================================
+  const compact = [];
+  compact.push(['Horario de trabajo Crew — ' + (state.store || '')]);
+  compact.push([]);
+  compact.push(['#', 'Nombre', 'Horas', ...dayHeaders, 'Días', 'Hrs sem.', 'FIRMA']);
+  people.forEach((entry, idx) => {
+    const p = entry.person;
+    let work = 0, hrs = 0;
+    const cells = DAYS.map(day => {
+      const s = entry.days[day];
+      if (!s) return 'LIBRE';
+      work++;
+      hrs += s.hours;
+      return s.start + ' - ' + s.end;
+    });
+    compact.push([idx + 1, p.name, p.weeklyHours || '', ...cells, work, Math.round(hrs * 10) / 10, '']);
+  });
+  compact.push([]);
+  compact.push(['', 'Apertura', '', ...DAYS.map(d => countOpen[d]), '', '', '']);
+  compact.push(['', 'Cierre', '', ...DAYS.map(d => countClose[d]), '', '', '']);
+  compact.push(['', 'Trasnoche', '', ...DAYS.map(d => countTrans[d]), '', '', '']);
+  const wsCompact = XLSX.utils.aoa_to_sheet(compact);
+  wsCompact['!cols'] = [
+    { wch: 4 }, { wch: 32 }, { wch: 7 },
+    ...DAYS.map(() => ({ wch: 14 })),
+    { wch: 6 }, { wch: 8 }, { wch: 10 }
+  ];
+  XLSX.utils.book_append_sheet(wb, wsCompact, 'Horario Crew (compacto)');
+
+  // ============================================================
+  // HORARIO_DATA (formato FTE interno)
+  // ============================================================
+  const hdHeader = ['ID turno','ID empleado','Nombre','Día','Inicio','Fin','Colación (min)','Horas turno','Validación','Tipo de turno','Fortaleza','Nivel Crew'];
+  const hdRows = crewShifts.map((s, i) => {
+    const p = state.team.find(t => t.id === s.empId);
+    return [i + 1, s.empId, s.name, s.day, s.start, s.end, s.breakMin || 0, s.hours, 'OK', s.type || 'OPERACIÓN', s.strength || (p && p.strength) || '', (p && p.level) || ''];
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([hdHeader, ...hdRows]), 'HORARIO_DATA');
+
+  // Gerencial
   const mgrHeader = ['Gerente','Rol',...DAYS,'Días trabajados'];
   const managers = state.managers || DEFAULT_MANAGERS;
   const week = state.managerShifts || {};
@@ -1505,21 +1997,33 @@ function exportExcel() {
   });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([mgrHeader, ...mgrRows]), 'Horario Gerencial');
 
-  const covHeader=['Franja',...DAYS];
-  const covRows=state.generated.slots.map((slot,i)=>[slot.slot,...DAYS.map(d=>`${state.generated.coverage[d][i]}/${slot.required}`)]);
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([covHeader,...covRows]),'Cobertura');
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([
-    ['Tienda',state.store],
-    ['Generado',new Date().toLocaleString('es-CL')],
+  // Cobertura
+  const covHeader = ['Franja', ...DAYS];
+  const covRows = g.slots.map((slot, i) => [slot.slot, ...DAYS.map(d => `${g.coverage[d][i]}/${slot.required}`)]);
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([covHeader, ...covRows]), 'Cobertura');
+
+  // Resumen
+  const minO = (state.config && state.config.minOpen) || 2;
+  const minC = (state.config && state.config.minClose) || 3;
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+    ['Tienda', state.store],
+    ['Generado', new Date().toLocaleString('es-CL')],
     ['Modo gerencia', state.managerScheduleLoaded ? 'Horario cargado (definitivo)' : 'Relleno automático'],
     ['Archivo gerencia', state.managerSourceFile || '—'],
-    ['Turnos crew',state.generated.metrics.shiftCount],
-    ['Horas crew',state.generated.metrics.totalHours],
-    ['Personas',state.generated.metrics.people],
-    ['Cobertura',state.generated.metrics.coverPct+'%']
-  ]),'Resumen');
+    ['Turnos crew', g.metrics.shiftCount],
+    ['Horas crew', g.metrics.totalHours],
+    ['Personas', g.metrics.people],
+    ['Cobertura media', (g.metrics.coverPct || 0) + '%'],
+    [],
+    ['Día','Aperturas','Meta aper.','Cierres','Meta cierre','Dotación'],
+    ...DAYS.map(d => {
+      const ds = crewShifts.filter(s => s.day === d);
+      return [d, countOpen[d], minO, countClose[d], minC, ds.length];
+    })
+  ]), 'Resumen');
+
   const suffix = state.managerScheduleLoaded ? 'Definitivo' : 'Optimo';
-  XLSX.writeFile(wb,`Horario_${suffix}_${(state.store||'Tienda').replace(/\s+/g,'_')}_${new Date().toISOString().slice(0,10)}.xlsx`);
+  XLSX.writeFile(wb, `Horario_Crew_${suffix}_${(state.store || 'Tienda').replace(/\s+/g, '_')}_${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 
 // --- Estado pendiente de archivos en pantalla inicial ---
