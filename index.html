@@ -156,7 +156,7 @@
       <div class="mt-8 bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div class="px-4 py-3 bg-slate-50 border-b border-slate-100">
           <h3 class="font-semibold text-primary-800">Cuadrícula crew (sin gerencia)</h3>
-          <p class="text-xs text-slate-500 mt-0.5">Prioridad fija: 2 aperturas (08:00) + 3 cierres. Dotación ideal todos los días. <strong>Clic en un turno</strong> para moverlo o cambiar horario (ideal para reforzar domingo).</p>
+          <p class="text-xs text-slate-500 mt-0.5">Aperturas fijas: <strong>08:00</strong> y <strong>08:30</strong> (quien hace más horas) · 3 cierres · resto en Peak. <strong>Clic en un turno</strong> para mover/editar.</p>
         </div>
         <div class="scroll-x">
           <table class="w-full text-sm">
@@ -855,64 +855,118 @@ function generateSchedule() {
     const openerIds = new Set();
     const closerIds = new Set();
 
-    function pickOpener(relaxed) {
-      // Buscar índice del slot que empieza ~08:00
-      let slot0800 = slots.findIndex(s => {
-        const m = timeToMin(s.start);
-        return m >= 7*60 + 30 && m <= 8*60 + 30;
-      });
-      if (slot0800 < 0) slot0800 = openSlotIdxs[0] != null ? openSlotIdxs[0] : 0;
+    // Franjas peak (venta alta): required alto o horario 11:30-15:00 y 18:30-21:00
+    const peakSlotIdxs = [];
+    slots.forEach((s, i) => {
+      const sm = timeToMin(s.start);
+      const isLunch = sm >= 11 * 60 + 30 && sm < 15 * 60;
+      const isDinner = sm >= 18 * 60 + 30 && sm < 21 * 60;
+      if ((s.required || 0) >= 5 || isLunch || isDinner) peakSlotIdxs.push(i);
+    });
 
-      const canOpen = shuffle(candidates.filter(p => {
-        if (assignedTodayIds.has(p.id) || daysWorked[p.id] >= p.maxDays) return false;
-        if (remaining[p.id] < 4) return false;
-        for (const w of p.windows) {
-          for (const i of openSlotIdxs) {
-            if (slots[i] && isInWindow(slots[i].start, slots[i].end, [w])) return true;
-          }
-        }
-        return relaxed; // en modo relajado permitir aunque no cruce open slots exactos
-      }));
-      for (const person of canOpen) {
-        if (openerIds.size >= MIN_OPENERS) break;
-        let best = null;
-        for (const w of person.windows) {
-          for (let s = 0; s < slots.length; s++) {
-            for (let e = s; e < slots.length; e++) {
-              const hours = (e - s + 1) * HALF;
-              const minH = relaxed ? 4 : (person.minShift || MIN_SHIFT_H);
-              const maxH = person.maxShift || MAX_SHIFT_H;
-              if (hours < minH || hours > maxH) continue;
-              if (hours > remaining[person.id]) continue;
-              if (!relaxed && !isInWindow(slots[s].start, slots[e].end, [w])) continue;
-              if (relaxed && !isInWindow(slots[s].start, slots[e].end, [w])) continue;
-              let coversOpen = 0;
-              for (let i = s; i <= e; i++) if (openSlotIdxs.includes(i)) coversOpen++;
-              if (coversOpen < 2 && !relaxed) continue;
-              if (coversOpen < 1 && relaxed) continue;
-              let coversClose = 0;
-              for (let i = s; i <= e; i++) if (closeSlotIdxs.includes(i)) coversClose++;
-              // Bonus fuerte si empieza en/cerca de 08:00
-              let startBonus = 0;
-              const sm = timeToMin(slots[s].start);
-              if (sm >= 7*60+30 && sm <= 8*60+30) startBonus = 50;
-              else if (sm <= 9*60) startBonus = 25;
-              const score = coversOpen * 40 - coversClose * 20 + startBonus + (10 - Math.abs(hours - (person.targetShift || 6)));
-              if (!best || score > best.score) best = { s, e, score };
+    // Aperturas fijas: 1 persona 08:00 + 1 persona 08:30 (priorizar quien hace más horas)
+    function assignFixedOpeners(relaxed) {
+      const targets = [
+        { start: '08:00', label: 'APERTURA 08:00' },
+        { start: '08:30', label: 'APERTURA 08:30' }
+      ];
+      // Ordenar por más horas semanales contratadas (y más horas restantes)
+      const pool = candidates
+        .filter(p => {
+          if (assignedTodayIds.has(p.id) || daysWorked[p.id] >= p.maxDays) return false;
+          if (remaining[p.id] < 5) return false;
+          if (!p.windows || !p.windows.length) return relaxed;
+          // Debe poder estar a las 08:00 o 08:30
+          return p.windows.some(w => {
+            const ws = timeToMin(w.start);
+            let we = timeToMin(w.end);
+            if (we <= ws) we += 1440;
+            // ventana que cubra mañana temprano
+            return ws <= 9 * 60 && we >= 10 * 60;
+          }) || relaxed;
+        })
+        .sort((a, b) => {
+          const ha = Number(a.weeklyHours) || 0;
+          const hb = Number(b.weeklyHours) || 0;
+          if (hb !== ha) return hb - ha;
+          return (remaining[b.id] || 0) - (remaining[a.id] || 0);
+        });
+
+      for (const tgt of targets) {
+        if (openerIds.size >= 2) break;
+        let placed = false;
+        for (const person of pool) {
+          if (assignedTodayIds.has(person.id) || openerIds.has(person.id)) continue;
+          // Buscar bloque que empiece cerca del target y dure lo más posible (más horas)
+          let best = null;
+          const targetMin = timeToMin(tgt.start);
+          for (const w of (person.windows || [{ start: '08:00', end: '18:00' }])) {
+            for (let s = 0; s < slots.length; s++) {
+              for (let e = s; e < slots.length; e++) {
+                const hours = (e - s + 1) * HALF;
+                const minH = relaxed ? 5 : Math.max(5, person.minShift || MIN_SHIFT_H);
+                const maxH = person.maxShift || MAX_SHIFT_H;
+                if (hours < minH || hours > maxH) continue;
+                if (hours > remaining[person.id]) continue;
+                if (!isInWindow(slots[s].start, slots[e].end, [w]) && !relaxed) continue;
+                const sm = timeToMin(slots[s].start);
+                // Debe empezar en franja de apertura (no cierre)
+                if (sm > 10 * 60) continue;
+                let coversClose = 0;
+                for (let i = s; i <= e; i++) if (closeSlotIdxs.includes(i)) coversClose++;
+                // Preferir empezar exactamente en target, turnos largos, sin cubrir cierre
+                const startDiff = Math.abs(sm - targetMin);
+                const score = hours * 15 - startDiff * 2 - coversClose * 40 + (sm <= 9 * 60 ? 20 : 0);
+                if (!best || score > best.score) best = { s, e, score, hours };
+              }
             }
           }
-        }
-        if (best) {
-          if (tryAssignBlock(person, best.s, best.e)) {
+          if (best && tryAssignBlock(person, best.s, best.e)) {
             openerIds.add(person.id);
             const last = shifts[shifts.length - 1];
             if (last && last.empId === person.id && last.day === day) {
               last.type = 'APERTURA';
               last.isOpener = true;
-              // Forzar inicio visual 08:00 si el slot arranca cerca
-              const sm = timeToMin(last.start);
-              if (sm >= 7*60 && sm <= 9*60) last.start = '08:00';
+              last.start = tgt.start;
+              // recalcular fin manteniendo duración
+              const dur = last.hours || best.hours;
+              const total = targetMin + Math.round(dur * 60) + (last.breakMin || 0);
+              last.end = String(Math.floor(total / 60) % 24).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
             }
+            placed = true;
+            break;
+          }
+        }
+        // Fallback: asignar turno fijo aunque tryAssignBlock falle por slots
+        if (!placed) {
+          for (const person of pool) {
+            if (assignedTodayIds.has(person.id) || openerIds.has(person.id)) continue;
+            const hours = Math.min(remaining[person.id] || 8, person.maxShift || 9, 9);
+            if (hours < 5) continue;
+            const start = tgt.start;
+            const sm = timeToMin(start);
+            const total = sm + Math.round(hours * 60) + 30;
+            const end = String(Math.floor(total / 60) % 24).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
+            // marcar cobertura en slots abiertos
+            for (let i = 0; i < slots.length; i++) {
+              const ss = timeToMin(slots[i].start);
+              if (ss >= sm && ss < sm + hours * 60) {
+                coverage[day][i] = (coverage[day][i] || 0) + 1;
+              }
+            }
+            remaining[person.id] -= hours;
+            hourBudget -= hours;
+            assignedTodayIds.add(person.id);
+            daysWorked[person.id] = (daysWorked[person.id] || 0) + 1;
+            openerIds.add(person.id);
+            shifts.push({
+              empId: person.id, name: person.name, role: person.role, strength: person.strength,
+              day, start, end, hours: Math.round(hours * 10) / 10, breakMin: colacionMin(person),
+              type: 'APERTURA', isMaster: (person.role || '').toLowerCase().includes('master'),
+              isCloser: false, isOpener: true
+            });
+            placed = true;
+            break;
           }
         }
       }
@@ -962,10 +1016,10 @@ function generateSchedule() {
       }
     }
 
-    // 1) Primero aperturas (2)
-    pickOpener(false);
-    if (openerIds.size < MIN_OPENERS) pickOpener(true);
-    // 2) Luego cierres (3)
+    // 1) Aperturas fijas: 08:00 + 08:30 (quien hace más horas)
+    assignFixedOpeners(false);
+    if (openerIds.size < 2) assignFixedOpeners(true);
+    // 2) Luego 3 cierres obligatorios
     pickCloser(false);
     if (closerIds.size < MIN_CLOSERS) pickCloser(true);
 
@@ -997,21 +1051,24 @@ function generateSchedule() {
               if (!isInWindow(slots[s].start, slots[e].end, [w])) continue;
 
               let score = blockScore(person, s, e);
-              // Strong push to reach ideal headcount
               if (needMorePeople) score += 40;
-              // On peak days push harder
               if (peakDays.has(day) && needMorePeople) score += 20;
-              // Evitar cierres extra si ya hay MIN_CLOSERS (no saturar cierre)
+              // Evitar cierres extra si ya hay 3
               let coversClose = 0;
               for (let i = s; i <= e; i++) if (closeSlotIdxs.includes(i)) coversClose++;
-              if (closerIds.size >= MIN_CLOSERS && coversClose >= 2) score -= 25;
-              // Preferir cubrir franjas con déficit
+              if (closerIds.size >= MIN_CLOSERS && coversClose >= 2) score -= 35;
+              // PEAK: priorizar franjas de venta alta (sobrantes de apertura van aquí)
+              let peakBoost = 0;
               let deficitBoost = 0;
               for (let i = s; i <= e; i++) {
+                if (peakSlotIdxs.includes(i)) peakBoost += 12;
                 const lack = (slots[i].required || 0) - (coverage[day][i] || 0);
-                if (lack > 0) deficitBoost += lack * 8;
+                if (lack > 0) deficitBoost += lack * 10;
               }
-              score += deficitBoost;
+              score += peakBoost + deficitBoost;
+              // Evitar más aperturas tempranas si ya hay 2
+              const sm = timeToMin(slots[s].start);
+              if (openerIds.size >= 2 && sm <= 9 * 60) score -= 15;
 
               if (score > best.score) best = { score, person, s, e };
             }
@@ -1236,12 +1293,13 @@ function generateSchedule() {
         // Ajustar tipo según necesidad de apertura/cierre
         let type = 'OPERACIÓN';
         let isOpener = false, isCloser = false;
-        if (openCount(day) < MIN_OPENERS) {
+        if (openCount(day) < 2) {
           type = 'APERTURA';
           isOpener = true;
-          t.start = '08:00';
-          const dur = Math.max(6, t.hours || 6);
-          const total = 8 * 60 + Math.round(dur * 60);
+          // Primera apertura 08:00, segunda 08:30
+          t.start = openCount(day) === 0 ? '08:00' : '08:30';
+          const dur = Math.max(6, t.hours || 8);
+          const total = timeToMin(t.start) + Math.round(dur * 60) + 30;
           t.end = String(Math.floor(total / 60) % 24).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
           t.hours = dur;
         } else if (closeCount(day) < MIN_CLOSERS) {
@@ -1275,15 +1333,24 @@ function generateSchedule() {
     DAYS.forEach(day => {
       let opens = openCount(day);
       let closes = closeCount(day);
-      if (opens < MIN_OPENERS) {
+      if (opens < 2) {
         const early = shifts
           .filter(s => !s.isManager && s.day === day && !(s.isCloser || s.type === 'CIERRE'))
-          .sort((a, b) => timeToMin(a.start) - timeToMin(b.start));
+          .sort((a, b) => {
+            // preferir quien tiene más horas semanales
+            const pa = state.team.find(t => t.id === a.empId);
+            const pb = state.team.find(t => t.id === b.empId);
+            const ha = (pa && pa.weeklyHours) || a.hours || 0;
+            const hb = (pb && pb.weeklyHours) || b.hours || 0;
+            if (hb !== ha) return hb - ha;
+            return timeToMin(a.start) - timeToMin(b.start);
+          });
+        const starts = ['08:00', '08:30'];
         for (const s of early) {
-          if (opens >= MIN_OPENERS) break;
+          if (opens >= 2) break;
           s.type = 'APERTURA';
           s.isOpener = true;
-          s.start = '08:00';
+          s.start = starts[opens] || '08:00';
           opens++;
         }
       }
@@ -1575,7 +1642,7 @@ function renderSchedule() {
         <p class="mt-1"><strong>Ciclo:</strong> ${g.metrics.cycleOk}/${g.metrics.compliance.length} con días exactos
           · <strong>Jornada:</strong> ${g.metrics.hoursOk}/${g.metrics.compliance.length} dentro de ±2 h</p>
         <p class="mt-1"><strong>Dotación crew (sin gerencia):</strong> ${daysLine}</p>
-        <p class="mt-1 text-xs text-slate-500">Dotación ideal es obligatoria en todos los días (se fuerza si falta gente). Mínimo fijo: 2 aperturas 08:00 + 3 cierres. La gerencia va aparte.</p>
+        <p class="mt-1 text-xs text-slate-500">Todos los días: 1 apertura 08:00 + 1 apertura 08:30 (más horas) + 3 cierres. Sobrantes en Peak. Dotación ideal obligatoria. Gerencia aparte.</p>
         <p class="mt-1 text-xs">${badTxt}</p>
       </div>`;
   }
