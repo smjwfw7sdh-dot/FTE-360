@@ -630,9 +630,15 @@ function generateSchedule() {
       else workDays = 2;
     }
     // Horas por turno para acercarse a la jornada contratada
+    // Crew 20h y 30h: MÁXIMO 7h diarias (legal / política tienda)
     const targetShift = workDays ? weekly / workDays : 6;
-    const minShift = Math.max(4, Math.min(8, Math.floor(targetShift - 1.5)));
-    const maxShift = Math.min(10, Math.max(minShift, Math.ceil(targetShift + 1.5)));
+    let minShift = Math.max(4, Math.min(8, Math.floor(targetShift - 1.5)));
+    let maxShift = Math.min(10, Math.max(minShift, Math.ceil(targetShift + 1.5)));
+    if (weekly > 0 && weekly <= 30) {
+      maxShift = 7;
+      minShift = Math.min(minShift, 7);
+      // 30h/4 días ≈ 7.5 → usar 7; 20h/3 días ≈ 6.7 → tope 7
+    }
     return { workDays, minShift, maxShift, weekly, targetShift };
   }
   function workDaysFromCycle(cycle, weeklyH) {
@@ -1109,7 +1115,7 @@ function generateSchedule() {
       for (const raw of pool) {
         const person = candidates.find(c => c.id === raw.id) || {
           ...raw,
-          windows: state.availability[raw.id][dayKey],
+                    windows: state.availability[raw.id][dayKey],
           assignedToday: 0,
           breakMin: colacionMin(raw),
           maxDays: 7,
@@ -1118,7 +1124,8 @@ function generateSchedule() {
           targetShift: 6
         };
         person.minShift = 4;
-        person.maxShift = 10;
+        const whP = Number(person.weeklyHours) || 0;
+        person.maxShift = (whP > 0 && whP <= 30) ? 7 : 10;
         person.maxDays = 7;
         if ((remaining[person.id] || 0) < 4) continue;
         let best = null;
@@ -2123,6 +2130,34 @@ function generateSchedule() {
         s.type = 'CIERRE';
         s.isCloser = true;
       });
+    });
+
+    // --- D) Crew 20h y 30h: NINGÚN turno > 7 horas diarias ---
+    shifts.filter(s => !s.isManager).forEach(s => {
+      const p = state.team.find(t => t.id === s.empId);
+      const wh = p ? (Number(p.weeklyHours) || 0) : 0;
+      if (wh <= 0 || wh > 30) return; // solo 16/20/30 (y similares ≤30)
+      if ((s.hours || 0) <= 7) return;
+      // Recortar a 7h netas manteniendo inicio
+      const start = s.start || '12:00';
+      const brk = s.breakMin || 0;
+      const sm = timeToMin(start);
+      const total = sm + Math.round(7 * 60) + brk;
+      s.end = String(Math.floor(total / 60) % 24).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
+      s.hours = 7;
+      // Si era cierre y el fin se cortó antes del cierre de tienda, ya no es cierre largo
+      // pero si sigue siendo tipo CIERRE y el fin quedó temprano, ajustar inicio hacia atrás
+      if (s.isCloser || s.type === 'CIERRE') {
+        const day = s.day;
+        const cEnd = (day === 'Jueves' || day === 'Viernes' || day === 'Sábado') ? '05:00' : '03:30';
+        let em = timeToMin(cEnd);
+        if (em < 8 * 60) em += 1440;
+        const startM = em - Math.round(7 * 60) - brk;
+        const norm = ((startM % 1440) + 1440) % 1440;
+        s.start = String(Math.floor(norm / 60) % 24).padStart(2, '0') + ':' + String(norm % 60).padStart(2, '0');
+        s.end = cEnd;
+        s.hours = 7;
+      }
     });
   })();
 
@@ -3315,3 +3350,4 @@ document.getElementById('btnExport').addEventListener('click',exportExcel);
 </script>
 </body>
 </html>
+
