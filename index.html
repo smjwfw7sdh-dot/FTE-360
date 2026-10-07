@@ -1337,7 +1337,7 @@ function generateSchedule() {
     // Domingo: 1×08:00 + 1×08:30 + 2×10:30
     function openingPlan(day) {
       if (day === 'Viernes') return [
-        { start: '08:00', count: 2, type: 'APERTURA' },
+        { start: '08:00', count: 1, type: 'APERTURA' },
         { start: '08:30', count: 1, type: 'APERTURA' }
       ];
       if (day === 'Domingo') return [
@@ -1537,12 +1537,11 @@ function generateSchedule() {
   })();
 
   // ============================================================
-  // 16h / Alondra: repartir sábado y domingo en partes iguales (8h + 8h)
+  // 16h (Alondra u otros): exactamente 2 días según disponibilidad, ~8h c/u
   // ============================================================
-  (function forceWeekend16h() {
+  (function force16hTwoDays() {
     function setRange(s, start, end) {
-      s.start = start;
-      s.end = end;
+      s.start = start; s.end = end;
       let sm = timeToMin(start), em = timeToMin(end);
       if (em <= sm) em += 1440;
       let hrs = (em - sm) / 60;
@@ -1550,71 +1549,119 @@ function generateSchedule() {
       if (brk) hrs = Math.max(4, hrs - brk / 60);
       s.hours = Math.round(hrs * 10) / 10;
     }
-    function upsertDay(person, day, start, end, type) {
-      let s = shifts.find(x => !x.isManager && x.empId === person.id && x.day === day);
-      if (!s) {
-        s = {
-          empId: person.id, name: person.name, role: person.role, strength: person.strength,
-          day, start, end, hours: 8, breakMin: colacionMin(person),
-          type: type || 'PEAK',
-          isMaster: (person.role || '').toLowerCase().includes('master'),
-          isCloser: false, isOpener: false
-        };
-        shifts.push(s);
-      }
-      setRange(s, start, end);
-      s.type = type || 'PEAK';
-      s.isCloser = type === 'CIERRE';
-      s.isOpener = type === 'APERTURA';
-      return s;
-    }
-
-    // Personas de ~16h (o nombre Alondra) → Sábado + Domingo 8h c/u
     const targets = state.team.filter(p => {
       const n = (p.name || '').toUpperCase();
       const wh = Number(p.weeklyHours) || 0;
-      if (n.includes('ALONDRA')) return true;
-      if (wh > 0 && wh <= 17) return true;
-      return false;
+      return n.includes('ALONDRA') || (wh > 0 && wh <= 17);
     });
-
     targets.forEach(person => {
-      // Quitar turnos de L-V
-      for (let i = shifts.length - 1; i >= 0; i--) {
-        const s = shifts[i];
-        if (s.isManager) continue;
-        if (s.empId !== person.id) continue;
-        if (s.day !== 'Sábado' && s.day !== 'Domingo') {
-          shifts.splice(i, 1);
-        }
-      }
-
-      // Disponibilidad: si está LIBRE un día de fin de semana, no forzar ese día
       const av = state.availability[person.id] || {};
-      const canSat = av['Sábado'] !== null;
-      const canSun = av['Domingo'] !== null;
-
-      // 8h + 8h = 16h
-      if (canSat) {
-        // Peak sábado: 12:00–20:30 (8h + colación aproximada) o 14:00–22:00
-        upsertDay(person, 'Sábado', '14:00', '22:00', 'PEAK');
+      // Días disponibles (no LIBRE)
+      const availDays = DAYS.filter(d => {
+        const w = av[d];
+        return w !== null && w !== undefined;
+      });
+      // Preferir días donde ya tiene turno; si no, los disponibles
+      let workDays = shifts.filter(s => !s.isManager && s.empId === person.id).map(s => s.day);
+      workDays = workDays.filter((d, i, a) => a.indexOf(d) === i);
+      if (workDays.length > 2) {
+        // quedarse con 2 (priorizar fin de semana si están disponibles)
+        const pref = ['Sábado', 'Domingo', 'Viernes', 'Jueves', 'Miércoles', 'Martes', 'Lunes'];
+        workDays.sort((a, b) => pref.indexOf(a) - pref.indexOf(b));
+        const keep = workDays.slice(0, 2);
+        for (let i = shifts.length - 1; i >= 0; i--) {
+          const s = shifts[i];
+          if (!s.isManager && s.empId === person.id && !keep.includes(s.day)) shifts.splice(i, 1);
+        }
+        workDays = keep;
       }
-      if (canSun) {
-        upsertDay(person, 'Domingo', '12:00', '20:00', 'PEAK');
+      while (workDays.length < 2 && availDays.length) {
+        const next = availDays.find(d => !workDays.includes(d));
+        if (!next) break;
+        workDays.push(next);
+        shifts.push({
+          empId: person.id, name: person.name, role: person.role, strength: person.strength,
+          day: next, start: '12:00', end: '20:00', hours: 8, breakMin: colacionMin(person),
+          type: 'PEAK', isMaster: false, isCloser: false, isOpener: false
+        });
       }
-
-      // Ajuste fino a exactamente 8h netas si hay colación
-      ['Sábado', 'Domingo'].forEach(day => {
+      // Ajustar a ~8h cada día trabajado
+      workDays.forEach(day => {
         const s = shifts.find(x => !x.isManager && x.empId === person.id && x.day === day);
         if (!s) return;
-        const targetNet = 8;
+        if (s.isCloser || s.type === 'CIERRE' || s.isOpener || s.type === 'APERTURA') return; // no tocar si es cierre/apertura
+        const start = s.start && timeToMin(s.start) >= 11 * 60 ? s.start : '12:00';
         const brk = s.breakMin || 0;
-        const grossMin = Math.round(targetNet * 60) + brk;
-        const sm = timeToMin(s.start);
-        const total = sm + grossMin;
+        const gross = 8 * 60 + brk;
+        const sm = timeToMin(start);
+        const total = sm + gross;
+        s.start = start;
         s.end = String(Math.floor(total / 60) % 24).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
-        s.hours = targetNet;
+        s.hours = 8;
+        s.type = s.type === 'RETRASADO' ? 'RETRASADO' : 'PEAK';
       });
+    });
+  })();
+
+  // ============================================================
+  // Nicole: 42h · 5x2 · disponibilidad completa (forzar)
+  // ============================================================
+  (function forceNicole42() {
+    const nicole = state.team.find(p => {
+      const n = (p.name || '').toUpperCase();
+      return n.includes('NICOLE') && n.includes('CA');
+    }) || state.team.find(p => ((p.name || '').toUpperCase().includes('NICOLE')));
+    if (!nicole) return;
+    nicole.weeklyHours = 42;
+    nicole.cycle = '5x2';
+    // Completa todos los días si no hay ventanas
+    if (!state.availability[nicole.id]) state.availability[nicole.id] = {};
+    const av = state.availability[nicole.id];
+    DAYS.forEach(d => {
+      if (av[d] === null) return; // respetar LIBRE explícito
+      if (!av[d] || !av[d].length) {
+        av[d] = [{ start: '08:00', end: '23:00' }];
+      }
+    });
+    // Asegurar exactamente 5 días de trabajo con ~8.4h (cerca de 42h)
+    let days = shifts.filter(s => !s.isManager && s.empId === nicole.id).map(s => s.day);
+    days = days.filter((d, i, a) => a.indexOf(d) === i);
+    const order = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+    // Preferir L-V
+    if (days.length > 5) {
+      days.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+      const keep = days.slice(0, 5);
+      for (let i = shifts.length - 1; i >= 0; i--) {
+        const s = shifts[i];
+        if (!s.isManager && s.empId === nicole.id && !keep.includes(s.day)) shifts.splice(i, 1);
+      }
+      days = keep;
+    }
+    while (days.length < 5) {
+      const next = order.find(d => !days.includes(d) && av[d] !== null);
+      if (!next) break;
+      days.push(next);
+      shifts.push({
+        empId: nicole.id, name: nicole.name, role: nicole.role, strength: nicole.strength,
+        day: next, start: '08:00', end: '17:00', hours: 8.5, breakMin: colacionMin(nicole) || 60,
+        type: 'APERTURA', isMaster: true, isCloser: false, isOpener: true
+      });
+    }
+    // Ajustar horas totales cerca de 42
+    const her = shifts.filter(s => !s.isManager && s.empId === nicole.id);
+    let total = her.reduce((n, s) => n + (s.hours || 0), 0);
+    // Si falta, alargar un poco; si sobra, recortar
+    her.forEach(s => {
+      if (Math.abs(total - 42) < 0.5) return;
+      if (total < 42 && s.hours < 10) {
+        const add = Math.min(0.5, 42 - total);
+        s.hours = Math.round((s.hours + add) * 10) / 10;
+        const sm = timeToMin(s.start);
+        const brk = s.breakMin || 0;
+        const totalMin = sm + Math.round(s.hours * 60) + brk;
+        s.end = String(Math.floor(totalMin / 60) % 24).padStart(2, '0') + ':' + String(totalMin % 60).padStart(2, '0');
+        total += add;
+      }
     });
   })();
 
