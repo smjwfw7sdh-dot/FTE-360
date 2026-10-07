@@ -1066,9 +1066,11 @@ function generateSchedule() {
                 if (lack > 0) deficitBoost += lack * 10;
               }
               score += peakBoost + deficitBoost;
-              // Evitar más aperturas tempranas si ya hay 2
+              // No meter más gente en apertura temprano (solo las 2 fijas)
               const sm = timeToMin(slots[s].start);
-              if (openerIds.size >= 2 && sm <= 9 * 60) score -= 15;
+              if (openerIds.size >= 2 && sm < 10 * 60) score -= 80;
+              // Preferir Peak si ya hay aperturas
+              if (openerIds.size >= 2 && peakSlotIdxs.includes(s)) score += 25;
 
               if (score > best.score) best = { score, person, s, e };
             }
@@ -1329,31 +1331,94 @@ function generateSchedule() {
       }
     });
 
-    // --- Paso C: asegurar mínimos apertura/cierre reclasificando si hace falta ---
+    // --- Paso C: plan de apertura EXACTO por día + 3 cierres ---
+    // Regla general: 1×08:00 + 1×08:30
+    // Viernes: 2×08:00 + 1×08:30 (resto a Peak)
+    // Domingo: 1×08:00 + 1×08:30 + 2×10:30
+    function openingPlan(day) {
+      if (day === 'Viernes') return [
+        { start: '08:00', count: 2, type: 'APERTURA' },
+        { start: '08:30', count: 1, type: 'APERTURA' }
+      ];
+      if (day === 'Domingo') return [
+        { start: '08:00', count: 1, type: 'APERTURA' },
+        { start: '08:30', count: 1, type: 'APERTURA' },
+        { start: '10:30', count: 2, type: 'PEAK' }
+      ];
+      return [
+        { start: '08:00', count: 1, type: 'APERTURA' },
+        { start: '08:30', count: 1, type: 'APERTURA' }
+      ];
+    }
+    function peakStartFor(day) {
+      // horario peak típico almuerzo
+      return '12:00';
+    }
+    function setShiftStart(s, newStart) {
+      const dur = s.hours || 6;
+      const brk = s.breakMin || 0;
+      const sm = timeToMin(newStart);
+      const total = sm + Math.round(dur * 60) + brk;
+      s.start = newStart;
+      s.end = String(Math.floor(total / 60) % 24).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
+    }
+
     DAYS.forEach(day => {
-      let opens = openCount(day);
-      let closes = closeCount(day);
-      if (opens < 2) {
-        const early = shifts
-          .filter(s => !s.isManager && s.day === day && !(s.isCloser || s.type === 'CIERRE'))
-          .sort((a, b) => {
-            // preferir quien tiene más horas semanales
-            const pa = state.team.find(t => t.id === a.empId);
-            const pb = state.team.find(t => t.id === b.empId);
-            const ha = (pa && pa.weeklyHours) || a.hours || 0;
-            const hb = (pb && pb.weeklyHours) || b.hours || 0;
-            if (hb !== ha) return hb - ha;
-            return timeToMin(a.start) - timeToMin(b.start);
-          });
-        const starts = ['08:00', '08:30'];
-        for (const s of early) {
-          if (opens >= 2) break;
+      const plan = openingPlan(day);
+      const totalEarlySlots = plan.reduce((n, p) => n + p.count, 0);
+
+      // Candidatos no-cierre, priorizar más horas semanales
+      const pool = shifts
+        .filter(s => !s.isManager && s.day === day && !(s.isCloser || s.type === 'CIERRE'))
+        .sort((a, b) => {
+          const pa = state.team.find(t => t.id === a.empId);
+          const pb = state.team.find(t => t.id === b.empId);
+          const ha = (pa && pa.weeklyHours) || a.hours || 0;
+          const hb = (pb && pb.weeklyHours) || b.hours || 0;
+          if (hb !== ha) return hb - ha;
+          return timeToMin(a.start) - timeToMin(b.start);
+        });
+
+      const used = new Set();
+      let planIdx = 0;
+      let planLeft = plan.map(p => p.count);
+
+      // 1) Asignar exactamente el plan de apertura / 10:30
+      for (const s of pool) {
+        // avanzar al siguiente cupo del plan
+        while (planIdx < plan.length && planLeft[planIdx] <= 0) planIdx++;
+        if (planIdx >= plan.length) break;
+        const slot = plan[planIdx];
+        setShiftStart(s, slot.start);
+        if (slot.type === 'APERTURA') {
           s.type = 'APERTURA';
           s.isOpener = true;
-          s.start = starts[opens] || '08:00';
-          opens++;
+        } else {
+          s.type = 'PEAK';
+          s.isOpener = false;
         }
+        used.add(s.empId);
+        planLeft[planIdx]--;
       }
+
+      // 2) Todo el resto que empiece muy temprano (< 11:00) → Peak (12:00)
+      const pk = peakStartFor(day);
+      pool.forEach(s => {
+        if (used.has(s.empId)) return;
+        if (s.isCloser || s.type === 'CIERRE') return;
+        const sm = timeToMin(s.start);
+        if (sm < 11 * 60) {
+          setShiftStart(s, pk);
+          s.type = 'PEAK';
+          s.isOpener = false;
+        } else if (sm >= 11 * 60 && sm < 16 * 60) {
+          s.type = s.type === 'APERTURA' ? 'PEAK' : (s.type || 'OPERACIÓN');
+          s.isOpener = false;
+        }
+      });
+
+      // 3) Garantizar 3 cierres
+      let closes = closeCount(day);
       if (closes < MIN_CLOSERS) {
         const late = shifts
           .filter(s => !s.isManager && s.day === day && !(s.isOpener || s.type === 'APERTURA'))
@@ -1362,6 +1427,7 @@ function generateSchedule() {
           if (closes >= MIN_CLOSERS) break;
           s.type = 'CIERRE';
           s.isCloser = true;
+          s.isOpener = false;
           closes++;
         }
       }
@@ -2213,144 +2279,163 @@ function exportExcel() {
   if (!state.generated) return;
   const wb = XLSX.utils.book_new();
   const g = state.generated;
-  const crewShifts = g.shifts.filter(s => !s.isManager)
-    .sort((a,b) => DAYS.indexOf(a.day) - DAYS.indexOf(b.day) || a.start.localeCompare(b.start) || a.name.localeCompare(b.name));
+  const crewShifts = g.shifts.filter(s => !s.isManager);
 
-  // ---- Fechas de la semana (si hay gerencia con fechas en el Excel, usar; si no, placeholder) ----
-  const weekDates = state.weekDates || {}; // day -> "19-oct" etc.
-  const dayHeaders = DAYS.map(d => {
+  const weekDates = state.weekDates || {};
+  const monthShort = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+  function dayLabel(d) {
     const dt = weekDates[d];
-    return dt ? (d.toUpperCase().replace('Á','A').replace('É','E') + ' ' + dt) : d.toUpperCase().replace('Á','A').replace('É','E');
-  });
+    if (dt) return String(dt);
+    return '';
+  }
+  function dayName(d) {
+    return d.toUpperCase().replace('Á','A').replace('É','E');
+  }
+  function fmtTime(t) {
+    if (!t) return '';
+    // "08:00" -> "8:00" como en la plantilla BK
+    const m = String(t).match(/(\d{1,2}):(\d{2})/);
+    if (!m) return String(t);
+    return String(Number(m[1])) + ':' + m[2];
+  }
 
-  // Map persona -> día -> shift
+  // persona -> día -> shift
   const byPerson = {};
   state.team.forEach(p => { byPerson[p.id] = { person: p, days: {} }; });
   crewShifts.forEach(s => {
-    if (!byPerson[s.empId]) byPerson[s.empId] = { person: { id: s.empId, name: s.name, role: s.role, strength: s.strength, weeklyHours: s.weeklyHours }, days: {} };
+    if (!byPerson[s.empId]) {
+      byPerson[s.empId] = { person: { id: s.empId, name: s.name, role: s.role, strength: s.strength, weeklyHours: s.weeklyHours }, days: {} };
+    }
     const prev = byPerson[s.empId].days[s.day];
     if (!prev || s.hours > prev.hours) byPerson[s.empId].days[s.day] = s;
   });
 
-  const people = Object.values(byPerson)
-    .filter(x => Object.keys(x.days).length > 0 || (x.person.weeklyHours > 0))
-    .sort((a,b) => a.person.name.localeCompare(b.person.name));
+  // Incluir todo el equipo del Excel (aunque algún día esté libre)
+  const people = state.team
+    .filter(p => p.name && String(p.name).trim() && String(p.name).trim() !== '0')
+    .map(p => byPerson[p.id] || { person: p, days: {} })
+    .sort((a, b) => a.person.name.localeCompare(b.person.name));
+
+  // Contadores
+  const countOpen = {}, countClose = {}, countTrans = {};
+  DAYS.forEach(d => { countOpen[d] = 0; countClose[d] = 0; countTrans[d] = 0; });
+  people.forEach(entry => {
+    DAYS.forEach(day => {
+      const s = entry.days[day];
+      if (!s) return;
+      const sm = timeToMin(s.start);
+      const em = timeToMin(s.end);
+      if (s.isOpener || s.type === 'APERTURA' || sm <= 9 * 60) countOpen[day]++;
+      if (s.isCloser || s.type === 'CIERRE' || sm >= 16 * 60 || (em > 0 && em <= 6 * 60)) countClose[day]++;
+      if (s.type === 'TRASNOCHE' || sm >= 20 * 60 || (em > 0 && em <= 7 * 60 && sm >= 18 * 60)) countTrans[day]++;
+    });
+  });
 
   // ============================================================
-  // HOJA PRINCIPAL: "Horario de trabajo Crew" (formato BK impreso)
-  // Cada celda de día usa 2 filas: inicio arriba, fin abajo
+  // Formato EXACTO BK: # | Nombre | Horas | (Inicio|Fin)×7 días | FIRMA
   // ============================================================
-  // Layout columnas: # | Nombre | Horas | Lun..Dom (cada día = 1 col) | FIRMA
-  // Filas por persona: 2 filas (start / end)
-
   const aoa = [];
-  // Título
-  aoa.push(['Horario de trabajo Crew', '', '', state.store || '', '', '', '', '', '', '']);
-  aoa.push(['Tienda: ' + (state.store || ''), '', '', '', '', '', '', '', '', '']);
+
+  // Fila 0: tienda
+  const top = ['Tienda: ' + (state.store || 'BK')];
+  while (top.length < 3 + DAYS.length * 2 + 1) top.push('');
+  top[3 + 2] = 'Horario de trabajo Crew';
+  aoa.push(top);
+
+  // Fila 1: vacía
   aoa.push([]);
 
-  // Encabezado
-  const header = ['#', 'Nombre', 'Horas', ...dayHeaders, 'FIRMA'];
+  // Fila 2: fechas encima de cada par de columnas de día
+  const dateRow = ['', '', ''];
+  DAYS.forEach(d => {
+    dateRow.push(dayLabel(d) || '');
+    dateRow.push('');
+  });
+  dateRow.push('');
+  aoa.push(dateRow);
+
+  // Fila 3: encabezados Nombre / Horas / LUNES ... / FIRMA
+  const header = ['', 'Nombre', 'Horas'];
+  DAYS.forEach(d => {
+    header.push(dayName(d));
+    header.push(''); // segunda col del día
+  });
+  header.push('FIRMA');
   aoa.push(header);
 
-  // Contadores apertura / cierre / trasnoche por día
-  const countOpen = {}; const countClose = {}; const countTrans = {};
-  DAYS.forEach(d => { countOpen[d] = 0; countClose[d] = 0; countTrans[d] = 0; });
-
+  // Filas de personas: cada día = inicio | fin (vacío = libre / negro en plantilla)
   people.forEach((entry, idx) => {
     const p = entry.person;
-    const rowStart = [idx + 1, p.name, p.weeklyHours || ''];
-    const rowEnd   = ['', '', ''];
+    const row = [idx + 1, p.name, p.weeklyHours || ''];
     DAYS.forEach(day => {
       const s = entry.days[day];
       if (!s) {
-        rowStart.push('LIBRE');
-        rowEnd.push('');
+        row.push(''); // libre
+        row.push('');
       } else {
-        rowStart.push(s.start);
-        rowEnd.push(s.end);
-        // clasificar
-        const sm = timeToMin(s.start);
-        const em = timeToMin(s.end);
-        if (s.type === 'APERTURA' || s.isOpener || sm <= 10 * 60) countOpen[day]++;
-        if (s.type === 'CIERRE' || s.isCloser || (sm >= 16 * 60) || (em > 0 && em <= 6 * 60)) countClose[day]++;
-        if (s.type === 'TRASNOCHE' || (sm >= 20 * 60) || (em > 0 && em <= 7 * 60 && sm >= 18 * 60)) countTrans[day]++;
+        row.push(fmtTime(s.start));
+        row.push(fmtTime(s.end));
       }
     });
-    rowStart.push(''); // FIRMA
-    rowEnd.push('');
-    aoa.push(rowStart);
-    aoa.push(rowEnd);
+    row.push(''); // FIRMA
+    aoa.push(row);
   });
 
+  // Fila vacía
   aoa.push([]);
-  // Totales Apertura / Cierre / Trasnoche
-  aoa.push(['', 'Apertura', '', ...DAYS.map(d => countOpen[d]), '']);
-  aoa.push(['', 'Cierre', '', ...DAYS.map(d => countClose[d]), '']);
-  aoa.push(['', 'Trasnoche', '', ...DAYS.map(d => countTrans[d]), '']);
 
-  const wsCrew = XLSX.utils.aoa_to_sheet(aoa);
+  // Totales Apertura / Cierre / Trasnoche (como en la foto)
+  const rowOpen = ['', 'Apertura', ''];
+  const rowClose = ['', 'Cierre', ''];
+  const rowTrans = ['', 'Trasnoche', ''];
+  DAYS.forEach(d => {
+    rowOpen.push(countOpen[d]);
+    rowOpen.push('');
+    rowClose.push(countClose[d]);
+    rowClose.push('');
+    rowTrans.push(countTrans[d]);
+    rowTrans.push('');
+  });
+  rowOpen.push('');
+  rowClose.push('');
+  rowTrans.push('');
+  aoa.push(rowOpen);
+  aoa.push(rowClose);
+  aoa.push(rowTrans);
 
-  // Anchos de columna
-  wsCrew['!cols'] = [
-    { wch: 4 }, { wch: 32 }, { wch: 7 },
-    ...DAYS.map(() => ({ wch: 12 })),
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+  // Anchos: #, Nombre, Horas, 14 cols día, FIRMA
+  ws['!cols'] = [
+    { wch: 4 }, { wch: 34 }, { wch: 7 },
+    ...DAYS.flatMap(() => [{ wch: 7 }, { wch: 7 }]),
     { wch: 10 }
   ];
 
-  // Merge título
-  wsCrew['!merges'] = [
-    { s: { r: 0, c: 0 }, e: { r: 0, c: 3 } },
-    { s: { r: 1, c: 0 }, e: { r: 1, c: 3 } }
-  ];
-
-  // Estilos básicos via cell notes no disponibles en sheetjs community;
-  // marcamos LIBRE y unimos visualmente con valor
-  XLSX.utils.book_append_sheet(wb, wsCrew, 'Horario Crew');
-
-  // ============================================================
-  // Versión compacta 1 fila por persona (más fácil de editar)
-  // ============================================================
-  const compact = [];
-  compact.push(['Horario de trabajo Crew — ' + (state.store || '')]);
-  compact.push([]);
-  compact.push(['#', 'Nombre', 'Horas', ...dayHeaders, 'Días', 'Hrs sem.', 'FIRMA']);
-  people.forEach((entry, idx) => {
-    const p = entry.person;
-    let work = 0, hrs = 0;
-    const cells = DAYS.map(day => {
-      const s = entry.days[day];
-      if (!s) return 'LIBRE';
-      work++;
-      hrs += s.hours;
-      return s.start + ' - ' + s.end;
-    });
-    compact.push([idx + 1, p.name, p.weeklyHours || '', ...cells, work, Math.round(hrs * 10) / 10, '']);
+  // Merges: título, cada nombre de día sobre 2 columnas, fechas
+  const merges = [];
+  // Título "Horario de trabajo Crew" aprox col 5-10
+  merges.push({ s: { r: 0, c: 5 }, e: { r: 0, c: 10 } });
+  merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: 2 } });
+  // Fechas y nombres de día: cada par de columnas
+  DAYS.forEach((_, i) => {
+    const c = 3 + i * 2;
+    merges.push({ s: { r: 2, c: c }, e: { r: 2, c: c + 1 } }); // fecha
+    merges.push({ s: { r: 3, c: c }, e: { r: 3, c: c + 1 } }); // LUNES etc
   });
-  compact.push([]);
-  compact.push(['', 'Apertura', '', ...DAYS.map(d => countOpen[d]), '', '', '']);
-  compact.push(['', 'Cierre', '', ...DAYS.map(d => countClose[d]), '', '', '']);
-  compact.push(['', 'Trasnoche', '', ...DAYS.map(d => countTrans[d]), '', '', '']);
-  const wsCompact = XLSX.utils.aoa_to_sheet(compact);
-  wsCompact['!cols'] = [
-    { wch: 4 }, { wch: 32 }, { wch: 7 },
-    ...DAYS.map(() => ({ wch: 14 })),
-    { wch: 6 }, { wch: 8 }, { wch: 10 }
-  ];
-  XLSX.utils.book_append_sheet(wb, wsCompact, 'Horario Crew (compacto)');
+  ws['!merges'] = merges;
 
-  // ============================================================
-  // HORARIO_DATA (formato FTE interno)
-  // ============================================================
-  const hdHeader = ['ID turno','ID empleado','Nombre','Día','Inicio','Fin','Colación (min)','Horas turno','Validación','Tipo de turno','Fortaleza','Nivel Crew'];
-  const hdRows = crewShifts.map((s, i) => {
-    const p = state.team.find(t => t.id === s.empId);
-    return [i + 1, s.empId, s.name, s.day, s.start, s.end, s.breakMin || 0, s.hours, 'OK', s.type || 'OPERACIÓN', s.strength || (p && p.strength) || '', (p && p.level) || ''];
-  });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([hdHeader, ...hdRows]), 'HORARIO_DATA');
+  XLSX.utils.book_append_sheet(wb, ws, 'Horario Crew');
+
+  // Hoja auxiliar detalle (opcional)
+  const hdHeader = ['ID turno','ID empleado','Nombre','Día','Inicio','Fin','Colación (min)','Horas turno','Tipo','Fortaleza'];
+  const hdRows = crewShifts
+    .sort((a,b) => DAYS.indexOf(a.day) - DAYS.indexOf(b.day) || a.start.localeCompare(b.start))
+    .map((s, i) => [i+1, s.empId, s.name, s.day, s.start, s.end, s.breakMin||0, s.hours, s.type||'', s.strength||'']);
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([hdHeader, ...hdRows]), 'Detalle');
 
   // Gerencial
-  const mgrHeader = ['Gerente','Rol',...DAYS,'Días trabajados'];
+  const mgrHeader = ['Gerente','Rol',...DAYS,'Días'];
   const managers = state.managers || DEFAULT_MANAGERS;
   const week = state.managerShifts || {};
   const mgrRows = managers.map(m => {
@@ -2365,33 +2450,9 @@ function exportExcel() {
   });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([mgrHeader, ...mgrRows]), 'Horario Gerencial');
 
-  // Cobertura
-  const covHeader = ['Franja', ...DAYS];
-  const covRows = g.slots.map((slot, i) => [slot.slot, ...DAYS.map(d => `${g.coverage[d][i]}/${slot.required}`)]);
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([covHeader, ...covRows]), 'Cobertura');
-
-  // Resumen
-  const minO = (state.config && state.config.minOpen) || 2;
-  const minC = (state.config && state.config.minClose) || 3;
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-    ['Tienda', state.store],
-    ['Generado', new Date().toLocaleString('es-CL')],
-    ['Modo gerencia', state.managerScheduleLoaded ? 'Horario cargado (definitivo)' : 'Relleno automático'],
-    ['Archivo gerencia', state.managerSourceFile || '—'],
-    ['Turnos crew', g.metrics.shiftCount],
-    ['Horas crew', g.metrics.totalHours],
-    ['Personas', g.metrics.people],
-    ['Cobertura media', (g.metrics.coverPct || 0) + '%'],
-    [],
-    ['Día','Aperturas','Meta aper.','Cierres','Meta cierre','Dotación'],
-    ...DAYS.map(d => {
-      const ds = crewShifts.filter(s => s.day === d);
-      return [d, countOpen[d], minO, countClose[d], minC, ds.length];
-    })
-  ]), 'Resumen');
-
   const suffix = state.managerScheduleLoaded ? 'Definitivo' : 'Optimo';
-  XLSX.writeFile(wb, `Horario_Crew_${suffix}_${(state.store || 'Tienda').replace(/\s+/g, '_')}_${new Date().toISOString().slice(0,10)}.xlsx`);
+  const storeSlug = (state.store || 'Tienda').replace(/\s+/g, '_');
+  XLSX.writeFile(wb, 'Horario_Crew_' + suffix + '_' + storeSlug + '_' + new Date().toISOString().slice(0,10) + '.xlsx');
 }
 
 // --- Estado pendiente de archivos en pantalla inicial ---
