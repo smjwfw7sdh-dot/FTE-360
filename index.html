@@ -1519,7 +1519,7 @@ function generateSchedule() {
         }
       }
 
-      // Lunes/Martes: asegurar al menos 1 RETRASADO hasta 22:00 si no hay
+      // Lunes/Martes/Viernes: al menos 1 RETRASADO hasta 22:00/23:00
       if (day === 'Lunes' || day === 'Martes' || day === 'Viernes') {
         const hasRet = shifts.some(s => !s.isManager && s.day === day && s.type === 'RETRASADO');
         if (!hasRet) {
@@ -1533,8 +1533,61 @@ function generateSchedule() {
           }
         }
       }
+
+      // FORZAR fin de cierre correcto: 03:30 o 05:00 — nunca 01:30 / 02:30 / 02:00
+      shifts.filter(s => !s.isManager && s.day === day && (s.isCloser || s.type === 'CIERRE')).forEach(s => {
+        setShiftRange(s, s.start || '18:30', cEnd);
+        s.type = 'CIERRE';
+        s.isCloser = true;
+      });
+
+      // Si alguien termina 01:30-02:59 y no es cierre legítimo → RETRASADO a 22:00
+      shifts.filter(s => !s.isManager && s.day === day).forEach(s => {
+        if (s.isCloser || s.type === 'CIERRE') return;
+        if (s.isOpener || s.type === 'APERTURA') return;
+        const em = timeToMin(s.end);
+        if (em > 0 && em < 3 * 60 + 30 && em !== timeToMin(cEnd)) {
+          // fin tipo 01:30 / 02:00 / 02:30 → no es cierre válido
+          setShiftRange(s, s.start && timeToMin(s.start) >= 14 * 60 ? s.start : '16:30', '22:00');
+          s.type = 'RETRASADO';
+          s.isCloser = false;
+        }
+      });
     });
   })();
+
+  // Garantizar dotación ideal final (por si post-procesos movieron gente)
+  (function ensureIdealFinal() {
+    const IDEAL = { Lunes:10, Martes:9, 'Miércoles':9, Jueves:12, Viernes:12, 'Sábado':11, Domingo:10 };
+    function hc(day) {
+      return new Set(shifts.filter(s => !s.isManager && s.day === day).map(s => s.empId)).size;
+    }
+    DAYS.forEach(day => {
+      const need = (IDEAL[day] || 10) - hc(day);
+      if (need <= 0) return;
+      const dayKey = DAY_KEYS[DAYS.indexOf(day)];
+      const pool = state.team.filter(p => {
+        if (shifts.some(s => !s.isManager && s.empId === p.id && s.day === day)) return false;
+        const av = state.availability[p.id];
+        if (av && av[dayKey] === null) return false;
+        return true;
+      }).sort((a, b) => {
+        const da = shifts.filter(s => !s.isManager && s.empId === a.id).length;
+        const db = shifts.filter(s => !s.isManager && s.empId === b.id).length;
+        return da - db;
+      });
+      for (let i = 0; i < need && i < pool.length; i++) {
+        const person = pool[i];
+        shifts.push({
+          empId: person.id, name: person.name, role: person.role, strength: person.strength,
+          day, start: '12:00', end: '20:00', hours: 8, breakMin: colacionMin(person) || 30,
+          type: 'PEAK', isMaster: (person.role||'').toLowerCase().includes('master'),
+          isCloser: false, isOpener: false
+        });
+      }
+    });
+  })();
+
 
   // ============================================================
   // 16h (Alondra u otros): exactamente 2 días según disponibilidad, ~8h c/u
