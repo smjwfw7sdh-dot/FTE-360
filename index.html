@@ -1988,6 +1988,144 @@ function generateSchedule() {
   state.managerShifts = JSON.parse(JSON.stringify(mgrWeek));
   state.mgrFills = mgrFills;
 
+  // ============================================================
+  // HARD LOCK FINAL — dotación exacta + 3 cierres correctos
+  // Se ejecuta al FINAL, nada lo deshace después
+  // ============================================================
+  (function hardLockStaffing() {
+    const IDEAL = { Lunes:10, Martes:9, 'Miércoles':9, Jueves:12, Viernes:12, 'Sábado':11, Domingo:10 };
+    function closeEnd(d) {
+      return (d === 'Jueves' || d === 'Viernes' || d === 'Sábado') ? '05:00' : '03:30';
+    }
+    function setRange(s, start, end) {
+      s.start = start;
+      s.end = end;
+      let sm = timeToMin(start), em = timeToMin(end);
+      if (em <= sm) em += 1440;
+      let hrs = (em - sm) / 60;
+      const brk = s.breakMin || 0;
+      if (brk) hrs = Math.max(4, hrs - brk / 60);
+      s.hours = Math.round(hrs * 10) / 10;
+    }
+    function peopleOn(day) {
+      return new Set(shifts.filter(s => !s.isManager && s.day === day).map(s => s.empId));
+    }
+    function countClose(day) {
+      return shifts.filter(s => !s.isManager && s.day === day && (s.isCloser || s.type === 'CIERRE')).length;
+    }
+
+    DAYS.forEach(day => {
+      const ideal = IDEAL[day] || 10;
+      const cEnd = closeEnd(day);
+      const dayKey = DAY_KEYS[DAYS.indexOf(day)];
+
+      // --- A) Forzar TODOS los cierres al fin correcto; máximo 3 ---
+      let closers = shifts.filter(s => !s.isManager && s.day === day && (s.isCloser || s.type === 'CIERRE'));
+      // Ordenar: preferir quien empieza más tarde
+      closers.sort((a, b) => timeToMin(b.start) - timeToMin(a.start));
+      closers.forEach((s, i) => {
+        if (i < 3) {
+          // inicio 18:30 o 20:00, fin exacto
+          const st = (i === 2 && (day === 'Jueves' || day === 'Viernes' || day === 'Sábado')) ? '20:00' : '18:30';
+          setRange(s, st, cEnd);
+          s.type = 'CIERRE';
+          s.isCloser = true;
+          s.isOpener = false;
+        } else {
+          // exceso de cierre → retrasado
+          setRange(s, '16:30', '22:00');
+          s.type = 'RETRASADO';
+          s.isCloser = false;
+        }
+      });
+
+      // Si hay menos de 3 cierres, promover desde turnos tarde
+      closers = shifts.filter(s => !s.isManager && s.day === day && (s.isCloser || s.type === 'CIERRE'));
+      if (closers.length < 3) {
+        const late = shifts
+          .filter(s => !s.isManager && s.day === day && !(s.isOpener || s.type === 'APERTURA') && !(s.isCloser || s.type === 'CIERRE'))
+          .sort((a, b) => timeToMin(b.start) - timeToMin(a.start));
+        for (const s of late) {
+          if (closers.length >= 3) break;
+          setRange(s, '18:30', cEnd);
+          s.type = 'CIERRE';
+          s.isCloser = true;
+          closers.push(s);
+        }
+      }
+
+      // --- B) Dotación EXACTA ---
+      let ids = peopleOn(day);
+
+      // B1) Si sobra gente: quitar PEAK / RETRASADO / OPERACIÓN (no apertura ni cierre)
+      let safety = 0;
+      while (ids.size > ideal && safety++ < 30) {
+        const removable = shifts.filter(s => {
+          if (s.isManager || s.day !== day) return false;
+          if (s.isOpener || s.type === 'APERTURA') return false;
+          if (s.isCloser || s.type === 'CIERRE') return false;
+          return true;
+        });
+        if (!removable.length) {
+          // último recurso: quitar un cierre solo si hay >3
+          if (countClose(day) > 3) {
+            const extra = shifts.find(s => !s.isManager && s.day === day && (s.isCloser || s.type === 'CIERRE'));
+            if (extra) {
+              const i = shifts.indexOf(extra);
+              if (i >= 0) shifts.splice(i, 1);
+            }
+          } else break;
+        } else {
+          // quitar el de menos horas o peak
+          removable.sort((a, b) => (a.hours || 0) - (b.hours || 0));
+          const i = shifts.indexOf(removable[0]);
+          if (i >= 0) shifts.splice(i, 1);
+        }
+        ids = peopleOn(day);
+      }
+
+      // B2) Si falta gente: agregar PEAK
+      safety = 0;
+      while (ids.size < ideal && safety++ < 30) {
+        const pool = state.team.filter(p => {
+          if (ids.has(p.id)) return false;
+          const av = state.availability[p.id];
+          if (av && av[dayKey] === null) return false;
+          return true;
+        }).sort((a, b) => {
+          const da = shifts.filter(s => !s.isManager && s.empId === a.id).length;
+          const db = shifts.filter(s => !s.isManager && s.empId === b.id).length;
+          return da - db;
+        });
+        if (!pool.length) break;
+        const person = pool[0];
+        shifts.push({
+          empId: person.id,
+          name: person.name,
+          role: person.role,
+          strength: person.strength,
+          day,
+          start: '12:00',
+          end: '20:00',
+          hours: 8,
+          breakMin: (typeof colacionMin === 'function' ? colacionMin(person) : 30) || 30,
+          type: 'PEAK',
+          isMaster: (person.role || '').toLowerCase().includes('master'),
+          isCloser: false,
+          isOpener: false
+        });
+        ids = peopleOn(day);
+      }
+
+      // --- C) Re-forzar fin de los 3 cierres (por si se tocó algo) ---
+      shifts.filter(s => !s.isManager && s.day === day && (s.isCloser || s.type === 'CIERRE')).forEach(s => {
+        setRange(s, s.start || '18:30', cEnd);
+        s.type = 'CIERRE';
+        s.isCloser = true;
+      });
+    });
+  })();
+
   const totalHoursCrew = shifts.filter(s => !s.isManager).reduce((s, sh) => s + sh.hours, 0);
   const totalHoursAll = shifts.reduce((s, sh) => s + sh.hours, 0);
   const uniquePeople = new Set(shifts.map(s => s.empId)).size;
