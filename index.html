@@ -1350,10 +1350,9 @@ function generateSchedule() {
         { start: '08:30', count: 1, type: 'APERTURA' }
       ];
     }
-    function peakStartFor(day) {
-      // horario peak típico almuerzo
-      return '12:00';
-    }
+    // Inicios Peak escalonados (no juntar a todos a las 12:00)
+    const PEAK_STARTS = ['11:00', '11:30', '12:00', '12:30', '13:00', '14:00'];
+
     function setShiftStart(s, newStart) {
       const dur = s.hours || 6;
       const brk = s.breakMin || 0;
@@ -1365,7 +1364,6 @@ function generateSchedule() {
 
     DAYS.forEach(day => {
       const plan = openingPlan(day);
-      const totalEarlySlots = plan.reduce((n, p) => n + p.count, 0);
 
       // Candidatos no-cierre, priorizar más horas semanales
       const pool = shifts
@@ -1385,7 +1383,6 @@ function generateSchedule() {
 
       // 1) Asignar exactamente el plan de apertura / 10:30
       for (const s of pool) {
-        // avanzar al siguiente cupo del plan
         while (planIdx < plan.length && planLeft[planIdx] <= 0) planIdx++;
         if (planIdx >= plan.length) break;
         const slot = plan[planIdx];
@@ -1401,20 +1398,21 @@ function generateSchedule() {
         planLeft[planIdx]--;
       }
 
-      // 2) Todo el resto que empiece muy temprano (< 11:00) → Peak (12:00)
-      const pk = peakStartFor(day);
-      pool.forEach(s => {
-        if (used.has(s.empId)) return;
-        if (s.isCloser || s.type === 'CIERRE') return;
+      // 2) Resto de operación/peak: escalonar en 11:00, 11:30, 12:00, 12:30, 13:00, 14:00
+      //    (incluye los que estaban temprano o todos amontonados a las 12:00)
+      const peakPool = pool.filter(s => {
+        if (used.has(s.empId)) return false;
+        if (s.isCloser || s.type === 'CIERRE') return false;
         const sm = timeToMin(s.start);
-        if (sm < 11 * 60) {
-          setShiftStart(s, pk);
-          s.type = 'PEAK';
-          s.isOpener = false;
-        } else if (sm >= 11 * 60 && sm < 16 * 60) {
-          s.type = s.type === 'APERTURA' ? 'PEAK' : (s.type || 'OPERACIÓN');
-          s.isOpener = false;
-        }
+        // reapuntar si es temprano, peak, o está en ventana almuerzo
+        return sm < 16 * 60;
+      });
+
+      peakPool.forEach((s, i) => {
+        const start = PEAK_STARTS[i % PEAK_STARTS.length];
+        setShiftStart(s, start);
+        s.type = 'PEAK';
+        s.isOpener = false;
       });
 
       // 3) Garantizar 3 cierres
